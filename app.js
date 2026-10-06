@@ -3,7 +3,7 @@ const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const enc=new TextEncoder(), dec=new TextDecoder();
 const DB_NAME='mswdb_secure_v1', STORE='kv';
 let db=null,key=null,state=null,meta=null,screen='patients',selectedPatient=null,activeTab='basic',lockTimer=null;
-const APP_VERSION='1.0.0';
+const APP_VERSION='1.0.1';
 
 const masterFields=['ベッド番号','主治医','病名','保険','本人職業','術式','入院元','かかりつけ','家構','KP職業','介護度','入院時介護度','介護連携','ケアマネ・施設','検討会','退院支援','食事','食事：介助量','水分：トロミ','排泄','排泄：介助量','排泄：尿便意','排泄：利用','移乗','移動器具','睡眠','睡眠：薬剤','高次脳','問題行動','スケール','リハ状況','DM注','コール'];
 const defaultMasters={
@@ -81,10 +81,63 @@ function render(){resetAutoLock();const net=navigator.onLine?'通信あり':'オ
 function activePatients(){return state.patients.filter(p=>!p.dischargeDate)}
 function getStatus(p){return p.status||'未設定'}
 function statusTag(s){const c=s.includes('要')?'red':s.includes('決定')?'green':s.includes('施設')?'purple':s==='未設定'?'':'orange';return `<span class="tag ${c}">${esc(s)}</span>`}
-function renderPatients(){const ps=activePatients();$('#main').innerHTML=`<div class="hero"><div><h1>入院患者</h1><p>在院患者のみを軽量に管理。退院患者は設定日数後に自動削除します。</p></div><div class="spacer"></div><button class="btn" id="newP">＋患者</button></div><div class="kpis"><div class="kpi"><b>${ps.length}</b><span>在院患者</span></div><div class="kpi"><b>${ps.filter(p=>p.tasks?.some(t=>!t.done)).length}</b><span>要対応あり</span></div><div class="kpi"><b>${ps.filter(p=>getStatus(p).includes('施設')).length}</b><span>施設調整中</span></div><div class="kpi"><b>${ps.filter(p=>getStatus(p).includes('決定')).length}</b><span>退院先決定</span></div></div><div class="toolbar"><input id="q" placeholder="氏名・病名・病床で検索"><select id="ward"><option value="">全病棟</option>${[...new Set(ps.map(p=>bedGroup(p.data['ベッド番号'])))].sort().map(x=>`<option>${esc(x)}</option>`).join('')}</select><button class="btn secondary" id="print">印刷</button></div><div id="patientList"></div>`;$('#newP').onclick=()=>openPatient(newPatient());$('#print').onclick=()=>window.print();$('#q').oninput=drawPatientList;$('#ward').onchange=drawPatientList;drawPatientList()}
-function drawPatientList(){const q=($('#q')?.value||'').trim().toLowerCase(),w=$('#ward')?.value||'';let ps=activePatients().filter(p=>{const txt=[p.data['氏名'],p.data['病名'],p.data['ベッド番号'],p.data['主治医']].join(' ').toLowerCase();return(!q||txt.includes(q))&&(!w||bedGroup(p.data['ベッド番号'])===w)});const grouped={};ps.forEach(p=>(grouped[bedGroup(p.data['ベッド番号'])]??=[]).push(p));const root=$('#patientList');if(!ps.length){root.innerHTML='<div class="empty">該当する患者がいません</div>';return}root.innerHTML=Object.keys(grouped).sort().map(g=>`<section class="section"><div class="section-title">${esc(g)} <span class="count">${grouped[g].length}</span></div><div class="patient-grid">${grouped[g].sort((a,b)=>String(a.data['ベッド番号']).localeCompare(String(b.data['ベッド番号']),'ja',{numeric:true})).map(patientCard).join('')}</div></section>`).join('');$$('.patient-card').forEach(c=>c.onclick=()=>openPatient(state.patients.find(p=>p.id===c.dataset.id)))}
-function patientCard(p){const days=daysSince(p.data['入院日'])||p.data['入院日数']||'';const tasks=p.tasks?.filter(t=>!t.done).length||0;return `<article class="patient-card" data-id="${p.id}"><div class="pc-head"><span class="bed">${esc(p.data['ベッド番号']||'未配置')}</span><span class="name">${esc(p.data['氏名']||'氏名未入力')}</span></div><div class="pc-meta"><span>主治医 ${esc(p.data['主治医']||'-')}</span><span>入院 ${esc(days)}日</span><span>${esc(p.data['病名']||'')}</span></div><div class="tags">${statusTag(getStatus(p))}${tasks?`<span class="tag red">要対応 ${tasks}</span>`:''}</div></article>`}
-function newPatient(){const data={};legacyFields.forEach(k=>data[k]='');return{id:uid(),data,status:'未設定',tasks:[],notes:[],dischargeDate:null,createdAt:nowISO(),updatedAt:nowISO(),_new:true}}
+function renderPatients(){const ps=activePatients();$('#main').innerHTML=`<div class="hero"><div><h1>入院患者</h1><p>在院患者のみを軽量に管理。退院患者は設定日数後に自動削除します。</p></div><div class="spacer"></div><button class="btn" id="newP">＋患者</button></div><div class="kpis"><div class="kpi"><b>${ps.length}</b><span>在院患者</span></div><div class="kpi"><b>${ps.filter(p=>p.tasks?.some(t=>!t.done)).length}</b><span>要対応あり</span></div><div class="kpi"><b>${ps.filter(p=>getStatus(p).includes('施設')).length}</b><span>施設調整中</span></div><div class="kpi"><b>${ps.filter(p=>getStatus(p).includes('決定')).length}</b><span>退院先決定</span></div></div><div class="toolbar"><input id="q" placeholder="氏名・病名・病床で検索"><select id="ward"><option value="">全病棟</option><option value="一般病棟">一般病棟</option><option value="ICU">ICU</option><option value="その他">その他・未配置</option></select><button class="btn secondary" id="print">印刷</button></div><div id="patientList"></div>`;$('#newP').onclick=()=>openPatient(newPatient());$('#print').onclick=()=>window.print();$('#q').oninput=drawPatientList;$('#ward').onchange=drawPatientList;drawPatientList()}
+function drawPatientList(){const q=($('#q')?.value||'').trim().toLowerCase(),w=$('#ward')?.value||'',all=activePatients();const filtered=all.filter(p=>patientMatches(p,q)&&(!w||wardForBed(p.data['ベッド番号'])===w));const root=$('#patientList');if(q&&!filtered.length){root.innerHTML='<div class="empty">該当する患者がいません</div>';return}
+  const general=layoutBedNumbers(BED_LAYOUT,all),icu=layoutBedNumbers(ICU_LAYOUT,all);let html='';
+  if(!w||w==='一般病棟'){html+=`<section class="map-section"><div class="map-section-title"><div><strong>一般病棟</strong><span>病室・ベッドマップ</span></div><span class="count">${general.reduce((n,r)=>n+r.beds.length,0)}床</span></div><div class="room-map">${general.map(room=>roomMapHtml(room,filtered,q)).join('')}</div></section>`}
+  if(!w||w==='ICU'){html+=`<section class="map-section"><div class="map-section-title"><div><strong>ICU</strong><span>集中治療室</span></div><span class="count">${icu.reduce((n,r)=>n+r.beds.length,0)}床</span></div><div class="room-map icu-map">${icu.map(room=>roomMapHtml(room,filtered,q,true)).join('')}</div></section>`}
+  const other=filtered.filter(p=>wardForBed(p.data['ベッド番号'])==='その他');if((!w||w==='その他')&&other.length)html+=`<section class="map-section"><div class="map-section-title"><div><strong>その他・未配置</strong><span>標準マップ外の患者</span></div><span class="count">${other.length}人</span></div><div class="room-map">${other.map(p=>patientBedHtml(p.data['ベッド番号']||'未配置',p,patientsForBed(p.data['ベッド番号'],all).length>1)).join('')}</div></section>`;
+  root.innerHTML=html||'<div class="empty">該当する患者がいません</div>';bindPatientMapEvents()}
+const BED_LAYOUT=[
+  {room:'201',beds:[1,2,3,4,5,6]},
+  {room:'202',beds:[1,2,3,4,5,6]},
+  {room:'203',beds:[1,2,3,4,5,6,7]},
+  {room:'205',beds:[1,2,3,4,5,6]},
+  {room:'206',beds:[1,2,3,4,5,6]},
+  {room:'207',beds:[1,2,3,4,5,6]},
+  {room:'208',beds:[1,2]},
+  {room:'210',beds:[1,2]},
+  {room:'211',beds:[1]},
+  {room:'212',beds:[1]},
+  {room:'213',beds:[1]}
+];
+
+const ICU_LAYOUT=[
+  {room:'ICU1',beds:[1,2,3,4,5,6,7]},
+  {room:'ICU2',beds:[1,2,3,4,5,6,7]},
+  {room:'ICU3',beds:[1,2,3,4,5,6,7,8,9]}
+];
+
+function normalizeBed(v){return String(v||'').trim().replace(/\s+/g,'').replace(/[‐-‒–—―ー－]/g,'-').toUpperCase()}
+function bedKey(room,n){return `${room}-${n}`}
+function wardForBed(v){const b=normalizeBed(v);if(/^ICU[123]-\d+$/.test(b))return'ICU';if(/^(201|202|203|205|206|207|208|210|211|212|213)-\d+$/.test(b))return'一般病棟';return'その他'}
+function patientMatches(p,q){if(!q)return true;return[p.data['氏名'],p.data['病名'],p.data['ベッド番号'],p.data['主治医']].join(' ').toLowerCase().includes(q)}
+function patientsForBed(bed,patients=activePatients()){const key=normalizeBed(bed);return patients.filter(p=>normalizeBed(p.data['ベッド番号'])===key)}
+function layoutBedNumbers(layout,patients){
+  return layout.map(room=>{
+    const nums=[...room.beds];
+    patients.forEach(p=>{
+      const b=normalizeBed(p.data['ベッド番号']),m=b.match(new RegExp(`^${room.room}-(\\d+)$`));
+      if(m&&!nums.includes(+m[1]))nums.push(+m[1]);
+    });
+    nums.sort((a,b)=>a-b);
+    return{room:room.room,beds:nums.map(n=>bedKey(room.room,n))}
+  })
+}
+function shortAdmissionDate(v){if(!v)return'';const d=new Date(v);if(Number.isNaN(d.getTime()))return esc(v);return`${d.getMonth()+1}/${d.getDate()}`}
+function patientBedHtml(bed,p,duplicate=false){
+  if(!p)return`<button class="bed-slot empty-bed" data-new-bed="${esc(bed)}"><b>${esc(bed)}</b><span>空床</span><small>タップして登録</small></button>`;
+  const days=daysSince(p.data['入院日'])||p.data['入院日数']||'',date=shortAdmissionDate(p.data['入院日']),tasks=p.tasks?.filter(t=>!t.done).length||0;
+  return`<button class="bed-slot occupied-bed" data-id="${p.id}"><div class="bed-line"><b>${esc(bed)}</b>${duplicate?'<span class="tag red">重複</span>':''}</div><strong>${esc(p.data['氏名']||'氏名未入力')}</strong><span>${date?`${date}入院`:''}${days?`　${esc(days)}日目`:''}</span><span>${esc(p.data['主治医']||'')}</span><div class="tags">${statusTag(getStatus(p))}${tasks?`<span class="tag red">要対応 ${tasks}</span>`:''}</div></button>`
+}
+function roomMapHtml(room,patients,q){
+  return`<div class="room-block"><div class="room-title">${esc(room.room)}</div><div class="bed-grid">${room.beds.map(bed=>{const ps=patientsForBed(bed,patients),p=ps[0]||null;if(q&&!p)return'';return patientBedHtml(bed,p,ps.length>1)}).join('')}</div></div>`
+}
+function bindPatientMapEvents(){
+  $$('.occupied-bed').forEach(x=>x.onclick=()=>openPatient(state.patients.find(p=>p.id===x.dataset.id)));
+  $$('.empty-bed').forEach(x=>x.onclick=()=>openPatient(newPatient(x.dataset.newBed)));
+}function patientCard(p){const days=daysSince(p.data['入院日'])||p.data['入院日数']||'';const tasks=p.tasks?.filter(t=>!t.done).length||0;return `<article class="patient-card" data-id="${p.id}"><div class="pc-head"><span class="bed">${esc(p.data['ベッド番号']||'未配置')}</span><span class="name">${esc(p.data['氏名']||'氏名未入力')}</span></div><div class="pc-meta"><span>主治医 ${esc(p.data['主治医']||'-')}</span><span>入院 ${esc(days)}日</span><span>${esc(p.data['病名']||'')}</span></div><div class="tags">${statusTag(getStatus(p))}${tasks?`<span class="tag red">要対応 ${tasks}</span>`:''}</div></article>`}
+function newPatient(bed=''){const data={};legacyFields.forEach(k=>data[k]='');data['ベッド番号']=bed;return{id:uid(),data,status:'未設定',tasks:[],notes:[],dischargeDate:null,createdAt:nowISO(),updatedAt:nowISO(),_new:true}}
 function openPatient(p){selectedPatient=p;activeTab='basic';renderPatientModal()}
 function renderPatientModal(){const p=selectedPatient;document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="sheet"><div class="sheethead"><button class="btn secondary" id="closeM">←</button><div><h2>${esc(p.data['氏名']||'新規患者')}</h2><div class="notice">${esc(p.data['ベッド番号']||'病床未設定')}　${esc(p.data['病名']||'')}</div></div><div class="spacer"></div><button class="btn" id="saveP">保存</button></div><div class="tabs">${[['basic','基本'],['care','家族・介護'],['adl','ADL'],['support','退院支援'],['notes','経過記録']].map(([k,n])=>`<button class="tab ${activeTab===k?'active':''}" data-tab="${k}">${n}</button>`).join('')}</div><div class="sheetbody" id="tabbody"></div></div></div>`);$('#closeM').onclick=closePatient;$('#saveP').onclick=savePatientFromForm;$$('.tab').forEach(t=>t.onclick=()=>{saveFieldsOnly();activeTab=t.dataset.tab;$('#modal').remove();renderPatientModal()});renderTab()}
 function closePatient(){if(selectedPatient?._new)selectedPatient=null;$('#modal')?.remove()}
