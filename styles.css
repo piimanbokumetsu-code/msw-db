@@ -21,3 +21,138 @@ button,input,select,textarea{font:inherit}button{touch-action:manipulation}.hidd
 .field select[data-master-field]{background:#fff;cursor:pointer}.field select[data-master-field]:focus{outline:2px solid rgba(20,184,166,.18);border-color:var(--brand2)}
 .backupwarn{background:#fff7ed;color:#9a3412;border-color:#fed7aa;font-weight:800}
 @media(max-width:620px){.topbar .pill:nth-of-type(2){display:none}.backupwarn{display:inline-block!important}}
+
+
+/* ===== 病床マップ Ver.1.0.1 ===== */
+
+.map-section{
+  margin:18px 0 28px;
+}
+
+.map-section-title{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  margin-bottom:12px;
+}
+
+.map-section-title > div{
+  display:flex;
+  align-items:baseline;
+  gap:10px;
+}
+
+.map-section-title strong{
+  font-size:20px;
+}
+
+.map-section-title span{
+  color:var(--muted);
+  font-size:13px;
+}
+
+.map-section-title .count{
+  margin-left:auto;
+}
+
+.room-map{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:14px;
+}
+
+.room-block{
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:16px;
+  padding:12px;
+}
+
+.room-title{
+  font-size:18px;
+  font-weight:800;
+  margin-bottom:10px;
+}
+
+.bed-grid{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:8px;
+}
+
+.bed-slot{
+  appearance:none;
+  width:100%;
+  min-height:130px;
+  padding:10px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  background:var(--card);
+  color:inherit;
+  font:inherit;
+  text-align:left;
+  cursor:pointer;
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+
+.bed-slot:hover{
+border-color:var(--brand);
+}
+
+.bed-slot b{
+  font-size:14px;
+}
+
+.bed-slot strong{
+  font-size:16px;
+}
+
+.bed-slot > span{
+  font-size:13px;
+}
+
+.bed-slot small{
+  color:var(--muted);
+}
+
+.bed-line{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:6px;
+}
+
+.empty-bed{
+  border-style:dashed;
+  justify-content:center;
+  align-items:center;
+  text-align:center;
+  opacity:.75;
+}
+
+.empty-bed span{
+  font-size:16px;
+  font-weight:700;
+}
+
+.occupied-bed{
+  box-shadow:0 2px 8px rgba(0,0,0,.04);
+}
+
+@media(max-width:800px){
+  .room-map{
+    grid-template-columns:1fr;
+  }
+
+  .bed-grid{
+    grid-template-columns:repeat(3,minmax(0,1fr));
+  }
+}
+
+@media(max-width:520px){
+  .bed-grid{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+}
