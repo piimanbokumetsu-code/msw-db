@@ -158,20 +158,20 @@ border-color:var(--brand);
 }
 
 
-/* ===== 朝一患者一覧 印刷 Ver.1.0.2 ===== */
+/* ===== 朝一患者一覧 印刷 Ver.1.0.3 ===== */
 .morning-print{display:none}
 @media print{
   @page{size:A4 portrait;margin:4.5mm 5mm}
   body{background:#fff!important}
   body>*:not(.morning-print){display:none!important}
   .morning-print{display:block!important;color:#000;background:#fff;font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,sans-serif}
-  .morning-page{width:100%;break-after:page;page-break-after:always}
+  .morning-page{width:100%;height:280mm;overflow:hidden;break-inside:avoid;page-break-inside:avoid;break-after:page;page-break-after:always}
   .morning-page:last-child{break-after:auto;page-break-after:auto}
   .morning-head{height:7mm;display:flex;align-items:flex-start;justify-content:space-between;gap:4mm;white-space:nowrap}
   .morning-head h1{font-size:13pt;line-height:1;margin:0;font-weight:800}
   .morning-head div{font-size:7pt;line-height:1.2}
-  .morning-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:5.8pt;line-height:1}
-  .morning-table th,.morning-table td{border:.35pt solid #000;text-align:center;vertical-align:middle;padding:0 .5mm;white-space:nowrap;overflow:hidden;text-overflow:clip}
+  .morning-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:5.8pt;line-height:1;break-inside:avoid;page-break-inside:avoid}
+  .morning-table thead{display:table-header-group}.morning-table tbody{break-inside:avoid;page-break-inside:avoid}.morning-table tr{break-inside:avoid;page-break-inside:avoid}.morning-table th,.morning-table td{border:.35pt solid #000;text-align:center;vertical-align:middle;padding:0 .5mm;white-space:nowrap;overflow:hidden;text-overflow:clip}
   .morning-table th{height:8mm;background:#eee!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;font-size:5.5pt;font-weight:700}
   .morning-page:nth-child(1) .morning-table td{height:14.35mm}
   .morning-page:nth-child(2) .morning-table td{height:10.85mm}
