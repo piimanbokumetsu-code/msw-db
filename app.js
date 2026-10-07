@@ -3,7 +3,7 @@ const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const enc=new TextEncoder(), dec=new TextDecoder();
 const DB_NAME='mswdb_secure_v1', STORE='kv';
 let db=null,key=null,state=null,meta=null,screen='patients',selectedPatient=null,activeTab='basic',lockTimer=null;
-const APP_VERSION='1.0.1';
+const APP_VERSION='1.0.2';
 
 const masterFields=['ベッド番号','主治医','病名','保険','本人職業','術式','入院元','かかりつけ','家構','KP職業','介護度','入院時介護度','介護連携','ケアマネ・施設','検討会','退院支援','食事','食事：介助量','水分：トロミ','排泄','排泄：介助量','排泄：尿便意','排泄：利用','移乗','移動器具','睡眠','睡眠：薬剤','高次脳','問題行動','スケール','リハ状況','DM注','コール'];
 const defaultMasters={
@@ -81,7 +81,37 @@ function render(){resetAutoLock();const net=navigator.onLine?'通信あり':'オ
 function activePatients(){return state.patients.filter(p=>!p.dischargeDate)}
 function getStatus(p){return p.status||'未設定'}
 function statusTag(s){const c=s.includes('要')?'red':s.includes('決定')?'green':s.includes('施設')?'purple':s==='未設定'?'':'orange';return `<span class="tag ${c}">${esc(s)}</span>`}
-function renderPatients(){const ps=activePatients();$('#main').innerHTML=`<div class="hero"><div><h1>入院患者</h1><p>在院患者のみを軽量に管理。退院患者は設定日数後に自動削除します。</p></div><div class="spacer"></div><button class="btn" id="newP">＋患者</button></div><div class="kpis"><div class="kpi"><b>${ps.length}</b><span>在院患者</span></div><div class="kpi"><b>${ps.filter(p=>p.tasks?.some(t=>!t.done)).length}</b><span>要対応あり</span></div><div class="kpi"><b>${ps.filter(p=>getStatus(p).includes('施設')).length}</b><span>施設調整中</span></div><div class="kpi"><b>${ps.filter(p=>getStatus(p).includes('決定')).length}</b><span>退院先決定</span></div></div><div class="toolbar"><input id="q" placeholder="氏名・病名・病床で検索"><select id="ward"><option value="">全病棟</option><option value="一般病棟">一般病棟</option><option value="ICU">ICU</option><option value="その他">その他・未配置</option></select><button class="btn secondary" id="print">印刷</button></div><div id="patientList"></div>`;$('#newP').onclick=()=>openPatient(newPatient());$('#print').onclick=()=>window.print();$('#q').oninput=drawPatientList;$('#ward').onchange=drawPatientList;drawPatientList()}
+function renderPatients(){const ps=activePatients();$('#main').innerHTML=`<div class="hero"><div><h1>入院患者</h1><p>在院患者のみを軽量に管理。退院患者は設定日数後に自動削除します。</p></div><div class="spacer"></div><button class="btn" id="newP">＋患者</button></div><div class="kpis"><div class="kpi"><b>${ps.length}</b><span>在院患者</span></div><div class="kpi"><b>${ps.filter(p=>p.tasks?.some(t=>!t.done)).length}</b><span>要対応あり</span></div><div class="kpi"><b>${ps.filter(p=>getStatus(p).includes('施設')).length}</b><span>施設調整中</span></div><div class="kpi"><b>${ps.filter(p=>getStatus(p).includes('決定')).length}</b><span>退院先決定</span></div></div><div class="toolbar"><input id="q" placeholder="氏名・病名・病床で検索"><select id="ward"><option value="">全病棟</option><option value="一般病棟">一般病棟</option><option value="ICU">ICU</option><option value="その他">その他・未配置</option></select><button class="btn secondary" id="print">朝一患者一覧を印刷</button></div><div id="patientList"></div>`;$('#newP').onclick=()=>openPatient(newPatient());$('#print').onclick=printMorningList;$('#q').oninput=drawPatientList;$('#ward').onchange=drawPatientList;drawPatientList()}
+function printText(v,max=0){const a=Array.from(String(v??'').trim());return esc(max?a.slice(0,max).join(''):a.join(''))}
+function shortCareLevel(v){const s=String(v||'').trim();return s.replace('要介護','要').replace('要支援','支')}
+function printPatientForBed(bed,patients){return patientsForBed(bed,patients)[0]||null}
+function printRowHtml(bed,patients){
+  const p=printPatientForBed(bed,patients);
+  if(!p)return`<tr><td>${esc(bed)}</td>${'<td></td>'.repeat(11)}</tr>`;
+  const d=p.data||{},days=daysSince(d['入院日'])||d['入院日数']||'';
+  return`<tr><td>${esc(bed)}</td><td>${printText(d['ＩＤ'])}</td><td>${printText(d['氏名'])}</td><td>${esc(shortAdmissionDate(d['入院日']))}</td><td>${printText(d['主治医'],3)}</td><td>${printText(d['住所'],3)}</td><td class="clip">${printText(d['病名'])}</td><td>${esc(shortCareLevel(d['介護度']))}</td><td class="clip">${printText(d['ケアマネ・施設'],12)}</td><td class="memo"></td><td>${printText(d['家構'])}</td><td>${esc(days)}</td></tr>`
+}
+function printTableHtml(beds,patients){
+  return`<table class="morning-table"><colgroup><col class="c-bed"><col class="c-id"><col class="c-name"><col class="c-admit"><col class="c-doc"><col class="c-address"><col class="c-disease"><col class="c-care"><col class="c-facility"><col class="c-memo"><col class="c-family"><col class="c-days"></colgroup><thead><tr>${['部屋','ID','氏名','入院日','主治医','住所','病名','介護度','ケアマネ・施設','メモ','家族','日数'].map(x=>`<th>${x}</th>`).join('')}</tr></thead><tbody>${beds.map(b=>printRowHtml(b,patients)).join('')}</tbody></table>`
+}
+function printMorningList(){
+  const patients=activePatients(),general=layoutBedNumbers(BED_LAYOUT,patients),icu=layoutBedNumbers(ICU_LAYOUT,patients);
+  const bedsFor=rooms=>rooms.flatMap(name=>general.find(r=>r.room===name)?.beds||[]);
+  const icuBeds=icu.flatMap(r=>r.beds);
+  const pages=[
+    {ward:'一般病棟',beds:bedsFor(['201','202','203'])},
+    {ward:'一般病棟',beds:bedsFor(['205','206','207','208','210','211','212','213'])},
+    {ward:'ICU',beds:icuBeds}
+  ];
+  const d=new Date(),date=`${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
+  $('#morningPrint')?.remove();
+  const root=document.createElement('div');root.id='morningPrint';root.className='morning-print';
+  root.innerHTML=pages.map((pg,i)=>`<section class="morning-page"><div class="morning-head"><h1>入院患者一覧</h1><div>${date}　朝　　${pg.ward}　${i+1}/3</div></div>${printTableHtml(pg.beds,patients)}</section>`).join('');
+  document.body.appendChild(root);
+  const cleanup=()=>{root.remove();window.removeEventListener('afterprint',cleanup)};
+  window.addEventListener('afterprint',cleanup,{once:true});
+  setTimeout(()=>window.print(),50);
+}
 function drawPatientList(){const q=($('#q')?.value||'').trim().toLowerCase(),w=$('#ward')?.value||'',all=activePatients();const filtered=all.filter(p=>patientMatches(p,q)&&(!w||wardForBed(p.data['ベッド番号'])===w));const root=$('#patientList');if(q&&!filtered.length){root.innerHTML='<div class="empty">該当する患者がいません</div>';return}
   const general=layoutBedNumbers(BED_LAYOUT,all),icu=layoutBedNumbers(ICU_LAYOUT,all);let html='';
   if(!w||w==='一般病棟'){html+=`<section class="map-section"><div class="map-section-title"><div><strong>一般病棟</strong><span>病室・ベッドマップ</span></div><span class="count">${general.reduce((n,r)=>n+r.beds.length,0)}床</span></div><div class="room-map">${general.map(room=>roomMapHtml(room,filtered,q)).join('')}</div></section>`}
