@@ -3,7 +3,7 @@ const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const enc=new TextEncoder(), dec=new TextDecoder();
 const DB_NAME='mswdb_secure_v1', STORE='kv';
 let db=null,key=null,state=null,meta=null,screen='patients',selectedPatient=null,activeTab='basic',lockTimer=null;
-const APP_VERSION='1.0.5';
+const APP_VERSION='1.0.6';
 
 const masterFields=['ベッド番号','主治医','病名','保険','本人職業','術式','入院元','かかりつけ','家構','KP職業','介護度','入院時介護度','介護連携','ケアマネ・施設','検討会','退院支援','食事','食事：介助量','水分：トロミ','排泄','排泄：介助量','排泄：尿便意','排泄：利用','移乗','移動器具','睡眠','睡眠：薬剤','高次脳','問題行動','スケール','リハ状況','DM注','コール'];
 const defaultMasters={
@@ -24,12 +24,24 @@ function ensureStateSchema(){
   for(const [k,vals] of Object.entries(defaultMasters)) state.masters[k]=uniq([...(state.masters[k]||[]),...vals]);
   for(const f of masterFields){
     const fromPatients=(state.patients||[]).map(p=>String(p.data?.[f]??'').trim()).filter(Boolean);
+    if(f==='ベッド番号')continue; // Official 67 beds are independent of imported values.
     state.masters[f]=uniq([...(state.masters[f]||[]),...fromPatients]);
   }
 }
 function uniq(a){return [...new Set(a.map(x=>String(x).trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ja',{numeric:true}));}
-function masterValues(f,current=''){ensureStateSchema();return uniq([...(state.masters?.[f]||[]),...(current?[current]:[])]);}
+function officialBeds(){return [...BED_LAYOUT,...ICU_LAYOUT].flatMap(r=>r.beds.map(n=>bedKey(r.room,n)))}
+function masterValues(f,current=''){
+  if(f==='ベッド番号')return officialBeds();
+  ensureStateSchema();return uniq([...(state.masters?.[f]||[]),...(current?[current]:[])]);
+}
 function masterSelectHtml(f,v='',attrs='data-field="'+f+'"'){
+  if(f==='ベッド番号'){
+    const current=String(v||'').trim(),valid=officialBeds().some(b=>normalizeBed(b)===normalizeBed(current));
+    const opts=officialBeds().map(b=>`<option value="${esc(b)}" ${normalizeBed(current)===normalizeBed(b)?'selected':''}>${esc(b)}</option>`).join('');
+    // Preserve legacy/invalid value until user explicitly chooses a valid bed.
+    const legacy=current&&!valid?`<option value="${esc(current)}" selected>その他・未配置（現在：${esc(current)}）</option>`:'';
+    return `<select ${attrs} data-master-field="ベッド番号"><option value="" ${!current?'selected':''}>その他・未配置（ベッド未選択）</option>${legacy}${opts}</select>`;
+  }
   const opts=masterValues(f,v).map(x=>`<option value="${esc(x)}" ${String(v)===String(x)?'selected':''}>${esc(x)}</option>`).join('');
   return `<select ${attrs} data-master-field="${esc(f)}"><option value="">未選択</option>${opts}<option value="__add__">＋ リストにない → 新規登録</option></select>`;
 }
@@ -94,6 +106,15 @@ function printRowHtml(bed,patients){
 function printTableHtml(beds,patients){
   return`<table class="morning-table"><colgroup><col class="c-bed"><col class="c-id"><col class="c-name"><col class="c-admit"><col class="c-doc"><col class="c-address"><col class="c-disease"><col class="c-care"><col class="c-facility"><col class="c-memo"><col class="c-family"><col class="c-days"></colgroup><thead><tr>${['部屋','ID','氏名','入院日','主治医','住所','病名','介護度','ケアマネ・施設','メモ','家族','日数'].map(x=>`<th>${x}</th>`).join('')}</tr></thead><tbody>${beds.map(b=>printRowHtml(b,patients)).join('')}</tbody></table>`
 }
+function printExtraTableHtml(patients){
+  const headers=['部屋','ID','氏名','入院日','主治医','住所','病名','介護度','ケアマネ・施設','メモ','家族','日数'];
+  const rows=patients.map(p=>{
+    const d=p.data||{},days=daysSince(d['入院日'])||d['入院日数']||'';
+    const cells=[d['ベッド番号']||'未配置',d['ＩＤ'],d['氏名'],shortAdmissionDate(d['入院日']),String(d['主治医']||'').slice(0,3),String(d['住所']||'').slice(0,3),d['病名'],shortCareLevel(d['介護度']),String(d['ケアマネ・施設']||'').slice(0,12),'',d['家構'],days];
+    return `<tr>${cells.map(x=>`<td>${printText(x)}</td>`).join('')}</tr>`;
+  }).join('');
+  return `<table class="morning-table"><colgroup><col class="c-bed"><col class="c-id"><col class="c-name"><col class="c-admit"><col class="c-doc"><col class="c-address"><col class="c-disease"><col class="c-care"><col class="c-facility"><col class="c-memo"><col class="c-family"><col class="c-days"></colgroup><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`;
+}
 function printMorningList(){
   const patients=activePatients(),general=layoutBedNumbers(BED_LAYOUT,patients),icu=layoutBedNumbers(ICU_LAYOUT,patients);
   const bedsFor=rooms=>rooms.flatMap(name=>general.find(r=>r.room===name)?.beds||[]);
@@ -103,10 +124,15 @@ function printMorningList(){
     {ward:'一般病棟',beds:bedsFor(['205','206','207','208','210','211','212','213'])},
     {ward:'ICU',beds:icuBeds}
   ];
+  const unplaced=patients.filter(p=>!isMappedBed(p.data['ベッド番号']));
+  // A second patient on the same official bed must never disappear from print.
+  const duplicates=officialBeds().flatMap(b=>patientsForBed(b,patients).slice(1));
+  const extra=[...unplaced,...duplicates];
+  if(extra.length)pages.push({ward:'その他・未配置／重複',extra});
   const d=new Date(),date=`${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;
   $('#morningPrint')?.remove();
   const root=document.createElement('div');root.id='morningPrint';root.className='morning-print';
-  root.innerHTML=pages.map((pg,i)=>`<section class="morning-page"><div class="morning-head"><h1>入院患者一覧</h1><div>${date}　朝　　${pg.ward}　${i+1}/3</div></div>${printTableHtml(pg.beds,patients)}</section>`).join('');
+  root.innerHTML=pages.map((pg,i)=>`<section class="morning-page"><div class="morning-head"><h1>入院患者一覧</h1><div>${date}　朝　　${pg.ward}　${i+1}/${pages.length}</div></div>${pg.extra?printExtraTableHtml(pg.extra):printTableHtml(pg.beds,patients)}</section>`).join('');
   document.body.appendChild(root);
   // iPadOS may dispatch afterprint while the printer is being selected.
   // Keep the print DOM until the next print or app lock, so the preview
@@ -242,7 +268,29 @@ async function resetAll(){
 function pickFile(accept,cb){const f=$('#fileInput');f.accept=accept;f.value='';f.onchange=()=>{if(f.files[0])cb(f.files[0])};f.click()}
 function parseCSV(text){text=text.replace(/^\uFEFF/,'');const rows=[];let row=[],cell='',q=false;for(let i=0;i<text.length;i++){const c=text[i],n=text[i+1];if(q){if(c==='"'&&n==='"'){cell+='"';i++}else if(c==='"')q=false;else cell+=c}else{if(c==='"')q=true;else if(c===','){row.push(cell);cell=''}else if(c==='\n'){row.push(cell);rows.push(row);row=[];cell=''}else if(c!=='\r')cell+=c}}if(cell.length||row.length){row.push(cell);rows.push(row)}return rows}
 function rowsToObjects(rows){const h=rows[0]||[];return rows.slice(1).filter(r=>r.some(x=>String(x).trim())).map(r=>Object.fromEntries(h.map((k,i)=>[k,r[i]??''])))}
-async function importPatients(file){const objs=rowsToObjects(parseCSV(await file.text()));let added=0,updated=0;for(const o of objs){if(!o['氏名']&&!o['ＩＤ'])continue;const idKey=String(o['ＩＤ']||'').trim();let p=idKey?state.patients.find(x=>String(x.data['ＩＤ']||'').trim()===idKey):null;if(!p){p=newPatient();delete p._new;state.patients.push(p);added++}else updated++;legacyFields.forEach(k=>{if(o[k]!==undefined)p.data[k]=o[k]});p.updatedAt=nowISO()}ensureStateSchema();await save();alert(`患者CSV読込完了\n追加 ${added}人 / 更新 ${updated}人`);render()}
+function fileMakerBed(bed){
+  const value=String(bed??'').trim(),m=normalizeBed(value).match(/^ICU3-(\d+)$/);
+  // This mapping applies ONLY to CSV imported from FileMaker.
+  if(m&&Number(m[1])>=7&&Number(m[1])<=15)return `ICU3-${Number(m[1])-6}`;
+  return value;
+}
+async function importPatients(file){
+  const objs=rowsToObjects(parseCSV(await file.text()));
+  const candidates=objs.filter(o=>o['氏名']||o['ＩＤ']);
+  const converted=candidates.filter(o=>o['ベッド番号']!==undefined&&fileMakerBed(o['ベッド番号'])!==String(o['ベッド番号']).trim());
+  const detail=converted.length?`\nICU3番号変換：${converted.length}件（旧7～15 → 新1～9）`:'';
+  if(!confirm(`患者CSVを取り込みますか？\n対象 ${candidates.length}件${detail}\n\n同じ患者IDは既存の情報が更新されます。取り込み前のバックアップを推奨します。`))return;
+  let added=0,updated=0;
+  for(const o of candidates){
+    const idKey=String(o['ＩＤ']||'').trim();
+    let p=idKey?state.patients.find(x=>String(x.data['ＩＤ']||'').trim()===idKey):null;
+    if(!p){p=newPatient();delete p._new;state.patients.push(p);added++}else updated++;
+    legacyFields.forEach(k=>{if(o[k]!==undefined)p.data[k]=k==='ベッド番号'?fileMakerBed(o[k]):o[k]});
+    p.updatedAt=nowISO();
+  }
+  ensureStateSchema();await save();
+  alert(`患者CSV読込完了\n追加 ${added}人 / 更新 ${updated}人${detail}`);render();
+}
 async function importDrugs(file){const objs=rowsToObjects(parseCSV(await file.text()));state.drugs=objs.filter(x=>x['薬名']);await save();alert(`薬剤 ${state.drugs.length}件を読み込みました。`);render()}
 async function backup(){state.settings.lastBackupAt=nowISO();await save();const pack={format:'MSWDB-BACKUP',version:1,appVersion:APP_VERSION,exportedAt:nowISO(),meta:await idbGet('meta'),data:await idbGet('data')};const blob=new Blob([JSON.stringify(pack)],{type:'application/json'});download(blob,`MSWDB_backup_${new Date().toISOString().slice(0,10)}.mswdb`);setTimeout(()=>{if(screen==='settings')renderSettings();else render()},300)}
 async function restore(file){try{const pack=JSON.parse(await file.text());if(pack.format!=='MSWDB-BACKUP')throw new Error();if(!confirm('現在のデータをバックアップ内容で置き換えます。よろしいですか？'))return;await idbSet('meta',pack.meta);await idbSet('data',pack.data);meta=pack.meta;key=null;state=null;alert('復元しました。バックアップ作成時の暗証で再度ロック解除してください。');renderLock()}catch(e){alert('バックアップファイルを読み込めませんでした。')}}
