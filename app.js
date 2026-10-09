@@ -3,7 +3,7 @@ const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const enc=new TextEncoder(), dec=new TextDecoder();
 const DB_NAME='mswdb_secure_v1', STORE='kv';
 let db=null,key=null,state=null,meta=null,screen='patients',selectedPatient=null,activeTab='basic',lockTimer=null;
-const APP_VERSION='1.0.6';
+const APP_VERSION='1.0.7';
 
 const masterFields=['ベッド番号','主治医','病名','保険','本人職業','術式','入院元','かかりつけ','家構','KP職業','介護度','入院時介護度','介護連携','ケアマネ・施設','検討会','退院支援','食事','食事：介助量','水分：トロミ','排泄','排泄：介助量','排泄：尿便意','排泄：利用','移乗','移動器具','睡眠','睡眠：薬剤','高次脳','問題行動','スケール','リハ状況','DM注','コール'];
 const defaultMasters={
@@ -236,6 +236,7 @@ async function renderSettings(){
   const last=state.settings.lastBackupAt?new Date(state.settings.lastBackupAt).toLocaleString('ja-JP'):'まだありません';
   $('#main').innerHTML=`<div class="hero"><div><h1>設定</h1><p>移行・バックアップ・容量・セキュリティを管理します。</p></div></div>
   <div class="panel"><h3>データ移行</h3><div class="settings-row"><div><b>患者CSVを読み込む</b><small>旧FileMakerから出した患者情報CSV。重複患者IDは更新します。</small></div><button class="btn secondary" id="impP">読込</button></div><div class="settings-row"><div><b>薬剤CSVを読み込む</b><small>医薬品分類・薬価・薬効・薬名の4列。</small></div><button class="btn secondary" id="impD">読込</button></div></div>
+  <div class="panel"><h3>FileMaker最新データで入れ替え（試験用）</h3><div class="settings-row"><div><b>患者CSVで全件入れ替え</b><small>患者データのみを全件置換します。薬剤・マスター・設定は保持します。患者ID（番号）必須。実行前に件数を確認します。</small></div><button class="btn danger" id="replaceP">全件入れ替え</button></div></div>
   <div class="panel"><h3>退院患者の自動削除</h3><div class="settings-row"><div><b>保持日数</b><small>退院日からこの日数を過ぎた患者を完全削除。</small></div><select id="retention"><option value="0">即時</option><option value="7">7日</option><option value="30">30日</option><option value="60">60日</option></select></div><div class="settings-row"><div><b>退院済み</b><small>${state.patients.filter(p=>p.dischargeDate).length}人</small></div><button class="btn danger" id="purge">期限超過を削除</button></div></div>
   <div class="panel"><h3>セキュリティ</h3><div class="settings-row"><div><b>自動ロック</b><small>無操作時に暗証画面へ戻ります。</small></div><select id="autolock"><option value="1">1分</option><option value="5">5分</option><option value="10">10分</option><option value="30">30分</option></select></div><div class="settings-row"><div><b>暗証を変更</b><small>現在の暗証を確認後、新しい暗証でDBを再暗号化します。</small></div><button class="btn secondary" id="changePin">変更</button></div></div>
   <div class="panel"><h3>バックアップ</h3><div class="settings-row"><div><b>暗号化バックアップ</b><small>患者・薬剤・経過記録・マスターを暗号化したまま書き出します。<br>最終：${esc(last)}</small></div><button class="btn secondary" id="backup">書出</button></div><div class="settings-row"><div><b>バックアップ復元</b><small>.mswdb ファイルを読み込みます。</small></div><button class="btn secondary" id="restore">復元</button></div></div>
@@ -246,6 +247,7 @@ async function renderSettings(){
   $('#retention').onchange=async e=>{state.settings.retentionDays=+e.target.value;purgeExpired();await save()};
   $('#autolock').onchange=async e=>{state.settings.autoLockMin=+e.target.value;await save();resetAutoLock()};
   $('#purge').onclick=async()=>{if(!confirm('保持期限を超えた退院患者を完全削除します。よろしいですか？'))return;purgeExpired();await save();renderSettings()};
+  $('#replaceP').onclick=()=>pickFile('.csv',replacePatientsFromFileMaker);
   $('#impP').onclick=()=>pickFile('.csv',importPatients);$('#impD').onclick=()=>pickFile('.csv',importDrugs);
   $('#backup').onclick=backup;$('#restore').onclick=()=>pickFile('.mswdb,application/json',restore);
   $('#changePin').onclick=changePin;
@@ -290,6 +292,48 @@ async function importPatients(file){
   }
   ensureStateSchema();await save();
   alert(`患者CSV読込完了\n追加 ${added}人 / 更新 ${updated}人${detail}`);render();
+}
+// Ver.1.0.7: explicitly requested full replacement of TEST patient records only.
+// The original merge import remains available separately and unchanged.
+function prepareFileMakerReplacement(csvText){
+  const rows=parseCSV(csvText), headers=(rows[0]||[]).map(h=>String(h).replace(/^\uFEFF/,'').trim());
+  const idCol=headers.includes('番号')?'番号':headers.includes('ＩＤ')?'ＩＤ':headers.includes('ID')?'ID':null;
+  if(!idCol||!headers.includes('氏名')||!headers.includes('ベッド番号'))throw new Error('必要な列（番号またはID・氏名・ベッド番号）がありません。');
+  const raw=rowsToObjects([headers,...rows.slice(1)]);
+  if(!raw.length)throw new Error('患者データがありません。');
+  const seen=new Set(), errors=[], patients=[], changed=[];
+  for(let i=0;i<raw.length;i++){
+    const o=raw[i],id=String(o[idCol]??'').trim(),name=String(o['氏名']??'').trim();
+    if(!id){errors.push(`${i+2}行目：患者IDが空欄`);continue;}
+    if(!name){errors.push(`${i+2}行目：氏名が空欄`);continue;}
+    if(seen.has(id)){errors.push(`${i+2}行目：患者IDの重複`);continue;}
+    seen.add(id);
+    const p=newPatient();delete p._new;
+    for(const k of legacyFields)if(o[k]!==undefined)p.data[k]=String(o[k]??'').trim();
+    p.data['ＩＤ']=id;
+    const oldBed=String(o['ベッド番号']??'').trim(),newBed=fileMakerBed(oldBed);
+    p.data['ベッド番号']=newBed;
+    if(oldBed!==newBed)changed.push({oldBed,newBed});
+    patients.push(p);
+  }
+  if(errors.length)throw new Error(`CSVを取り込めません。\n${errors.slice(0,8).join('\n')}${errors.length>8?'\nほかにもエラーがあります':''}`);
+  const invalid=patients.filter(p=>p.data['ベッド番号']&&!isMappedBed(p.data['ベッド番号']));
+  return {patients,changed,invalid};
+}
+async function replacePatientsFromFileMaker(file){
+  try{
+    const {patients,changed,invalid}=prepareFileMakerReplacement(await file.text());
+    const preview=`FileMaker患者データ：${patients.length}人\n現在のアプリ患者データ：${state.patients.length}人\nICU3番号変換：${changed.length}人\nその他・未配置：${invalid.length}人\n\n現在の患者データ（メモ・経過記録・タスクを含む）をすべて削除し、CSVの患者データに入れ替えます。\n薬剤・マスター・設定・暗証は保持されます。\n\n続行しますか？`;
+    if(!confirm(preview))return;
+    const word=prompt('最終確認：患者データを全件入れ替える場合は「入れ替え」と入力してください。');
+    if(word!=='入れ替え')return;
+    // Single encrypted state save: do not mutate the in-memory state until persistence succeeds.
+    const next={...state,patients,version:APP_VERSION,updatedAt:nowISO()};
+    await idbSet('data',await encryptObj(next));
+    state=next;ensureStateSchema();
+    alert(`全件入れ替えが完了しました。\n患者 ${patients.length}人\nICU3番号変換 ${changed.length}人\nその他・未配置 ${invalid.length}人`);
+    render();
+  }catch(e){alert(`患者CSVの入れ替えを中止しました。\n${e.message||'ファイルの読み込みに失敗しました。'}`)}
 }
 async function importDrugs(file){const objs=rowsToObjects(parseCSV(await file.text()));state.drugs=objs.filter(x=>x['薬名']);await save();alert(`薬剤 ${state.drugs.length}件を読み込みました。`);render()}
 async function backup(){state.settings.lastBackupAt=nowISO();await save();const pack={format:'MSWDB-BACKUP',version:1,appVersion:APP_VERSION,exportedAt:nowISO(),meta:await idbGet('meta'),data:await idbGet('data')};const blob=new Blob([JSON.stringify(pack)],{type:'application/json'});download(blob,`MSWDB_backup_${new Date().toISOString().slice(0,10)}.mswdb`);setTimeout(()=>{if(screen==='settings')renderSettings();else render()},300)}
