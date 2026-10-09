@@ -158,7 +158,7 @@ border-color:var(--brand);
 }
 
 
-/* ===== 朝一患者一覧 印刷 Ver.1.0.4 ===== */
+/* ===== 朝一患者一覧 印刷 Ver.1.0.5 ===== */
 .morning-print{display:none}
 @media print{
   @page{size:A4 portrait;margin:4.5mm 5mm}

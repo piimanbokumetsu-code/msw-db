@@ -3,7 +3,7 @@ const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const enc=new TextEncoder(), dec=new TextDecoder();
 const DB_NAME='mswdb_secure_v1', STORE='kv';
 let db=null,key=null,state=null,meta=null,screen='patients',selectedPatient=null,activeTab='basic',lockTimer=null;
-const APP_VERSION='1.0.4';
+const APP_VERSION='1.0.5';
 
 const masterFields=['ベッド番号','主治医','病名','保険','本人職業','術式','入院元','かかりつけ','家構','KP職業','介護度','入院時介護度','介護連携','ケアマネ・施設','検討会','退院支援','食事','食事：介助量','水分：トロミ','排泄','排泄：介助量','排泄：尿便意','排泄：利用','移乗','移動器具','睡眠','睡眠：薬剤','高次脳','問題行動','スケール','リハ状況','DM注','コール'];
 const defaultMasters={
@@ -69,7 +69,7 @@ async function decryptObj(blob,k=key){const pt=await crypto.subtle.decrypt({name
 async function save(){if(!key||!state)return;state.updatedAt=nowISO();await idbSet('data',await encryptObj(state));resetAutoLock()}
 function blankState(){return{version:APP_VERSION,patients:[],drugs:[],masters:{},settings:{retentionDays:30,autoLockMin:5,lastBackupAt:null},createdAt:nowISO(),updatedAt:nowISO()}}
 async function init(){await openDB();meta=await idbGet('meta');if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});try{if(navigator.storage?.persist)await navigator.storage.persist()}catch(e){}renderLock()}
-function renderLock(msg=''){const fresh=!meta;$('#app').innerHTML=`<div class="lockwrap"><div class="lockcard"><h1>MSW患者管理</h1><p>${fresh?'初回設定：この端末用の暗証を作成します。':'暗証を入力してロック解除してください。'}</p>${msg?`<div class="alert">${esc(msg)}</div>`:''}<input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="6文字以上" /><button class="btn" id="unlock" style="width:100%">${fresh?'暗証を設定':'ロック解除'}</button><p class="notice">患者情報は端末内で暗号化して保存します。暗証を忘れると復旧できません。端末自体のパスコード・紛失対策も必ず有効にしてください。</p></div></div>`;$('#unlock').onclick=fresh?setup:unlock;$('#pin').onkeydown=e=>{if(e.key==='Enter')$('#unlock').click()};setTimeout(()=>$('#pin').focus(),80)}
+function renderLock(msg=''){document.getElementById('morningPrint')?.remove();const fresh=!meta;$('#app').innerHTML=`<div class="lockwrap"><div class="lockcard"><h1>MSW患者管理</h1><p>${fresh?'初回設定：この端末用の暗証を作成します。':'暗証を入力してロック解除してください。'}</p>${msg?`<div class="alert">${esc(msg)}</div>`:''}<input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="6文字以上" /><button class="btn" id="unlock" style="width:100%">${fresh?'暗証を設定':'ロック解除'}</button><p class="notice">患者情報は端末内で暗号化して保存します。暗証を忘れると復旧できません。端末自体のパスコード・紛失対策も必ず有効にしてください。</p></div></div>`;$('#unlock').onclick=fresh?setup:unlock;$('#pin').onkeydown=e=>{if(e.key==='Enter')$('#unlock').click()};setTimeout(()=>$('#pin').focus(),80)}
 async function setup(){const pin=$('#pin').value;if(pin.length<6)return renderLock('暗証は6文字以上にしてください。');const salt=crypto.getRandomValues(new Uint8Array(16));key=await derive(pin,salt);const check=await encryptObj({ok:true});meta={version:1,salt:b64(salt),check,createdAt:nowISO()};await idbSet('meta',meta);state=blankState();ensureStateSchema();await save();purgeExpired();render();}
 async function unlock(){try{const pin=$('#pin').value;key=await derive(pin,unb64(meta.salt));await decryptObj(meta.check);const blob=await idbGet('data');state=blob?await decryptObj(blob):blankState();ensureStateSchema();await save();purgeExpired();render()}catch(e){key=null;renderLock('暗証が違います。')}}
 function lock(){key=null;state=null;selectedPatient=null;clearTimeout(lockTimer);renderLock()}
@@ -108,15 +108,16 @@ function printMorningList(){
   const root=document.createElement('div');root.id='morningPrint';root.className='morning-print';
   root.innerHTML=pages.map((pg,i)=>`<section class="morning-page"><div class="morning-head"><h1>入院患者一覧</h1><div>${date}　朝　　${pg.ward}　${i+1}/3</div></div>${printTableHtml(pg.beds,patients)}</section>`).join('');
   document.body.appendChild(root);
-  const cleanup=()=>{root.remove();window.removeEventListener('afterprint',cleanup)};
-  window.addEventListener('afterprint',cleanup,{once:true});
+  // iPadOS may dispatch afterprint while the printer is being selected.
+  // Keep the print DOM until the next print or app lock, so the preview
+  // remains intact during AirPrint's printer-selection re-pagination.
   setTimeout(()=>window.print(),50);
 }
 function drawPatientList(){const q=($('#q')?.value||'').trim().toLowerCase(),w=$('#ward')?.value||'',all=activePatients();const filtered=all.filter(p=>patientMatches(p,q)&&(!w||wardForBed(p.data['ベッド番号'])===w));const root=$('#patientList');if(q&&!filtered.length){root.innerHTML='<div class="empty">該当する患者がいません</div>';return}
   const general=layoutBedNumbers(BED_LAYOUT,all),icu=layoutBedNumbers(ICU_LAYOUT,all);let html='';
   if(!w||w==='一般病棟'){html+=`<section class="map-section"><div class="map-section-title"><div><strong>一般病棟</strong><span>病室・ベッドマップ</span></div><span class="count">${general.reduce((n,r)=>n+r.beds.length,0)}床</span></div><div class="room-map">${general.map(room=>roomMapHtml(room,filtered,q)).join('')}</div></section>`}
   if(!w||w==='ICU'){html+=`<section class="map-section"><div class="map-section-title"><div><strong>ICU</strong><span>集中治療室</span></div><span class="count">${icu.reduce((n,r)=>n+r.beds.length,0)}床</span></div><div class="room-map icu-map">${icu.map(room=>roomMapHtml(room,filtered,q,true)).join('')}</div></section>`}
-  const other=filtered.filter(p=>wardForBed(p.data['ベッド番号'])==='その他');if((!w||w==='その他')&&other.length)html+=`<section class="map-section"><div class="map-section-title"><div><strong>その他・未配置</strong><span>標準マップ外の患者</span></div><span class="count">${other.length}人</span></div><div class="room-map">${other.map(p=>patientBedHtml(p.data['ベッド番号']||'未配置',p,patientsForBed(p.data['ベッド番号'],all).length>1)).join('')}</div></section>`;
+  const other=filtered.filter(p=>!isMappedBed(p.data['ベッド番号']));if((!w||w==='その他')&&other.length)html+=`<section class="map-section"><div class="map-section-title"><div><strong>その他・未配置</strong><span>標準マップ外の患者</span></div><span class="count">${other.length}人</span></div><div class="room-map">${other.map(p=>patientBedHtml(p.data['ベッド番号']||'未配置',p,patientsForBed(p.data['ベッド番号'],all).length>1)).join('')}</div></section>`;
   root.innerHTML=html||'<div class="empty">該当する患者がいません</div>';bindPatientMapEvents()}
 const BED_LAYOUT=[
   {room:'201',beds:[1,2,3,4,5,6]},
@@ -127,9 +128,9 @@ const BED_LAYOUT=[
   {room:'207',beds:[1,2,3,4,5,6]},
   {room:'208',beds:[1,2]},
   {room:'210',beds:[1,2]},
-  {room:'211',beds:[1]},
-  {room:'212',beds:[1]},
-  {room:'213',beds:[1]}
+  {room:'211',beds:['']},
+  {room:'212',beds:['']},
+  {room:'213',beds:['']}
 ];
 
 const ICU_LAYOUT=[
@@ -139,20 +140,14 @@ const ICU_LAYOUT=[
 ];
 
 function normalizeBed(v){return String(v||'').trim().replace(/\s+/g,'').replace(/[‐-‒–—―ー－]/g,'-').toUpperCase()}
-function bedKey(room,n){return `${room}-${n}`}
-function wardForBed(v){const b=normalizeBed(v);if(/^ICU[123]-\d+$/.test(b))return'ICU';if(/^(201|202|203|205|206|207|208|210|211|212|213)-\d+$/.test(b))return'一般病棟';return'その他'}
+function bedKey(room,n){return n===''?room:`${room}-${n}`}
+function isMappedBed(v){const b=normalizeBed(v);return [...BED_LAYOUT,...ICU_LAYOUT].some(room=>room.beds.some(n=>normalizeBed(bedKey(room.room,n))===b))}
+function wardForBed(v){const b=normalizeBed(v);if(!isMappedBed(b))return'その他';return b.startsWith('ICU')?'ICU':'一般病棟'}
 function patientMatches(p,q){if(!q)return true;return[p.data['氏名'],p.data['病名'],p.data['ベッド番号'],p.data['主治医']].join(' ').toLowerCase().includes(q)}
 function patientsForBed(bed,patients=activePatients()){const key=normalizeBed(bed);return patients.filter(p=>normalizeBed(p.data['ベッド番号'])===key)}
 function layoutBedNumbers(layout,patients){
-  return layout.map(room=>{
-    const nums=[...room.beds];
-    patients.forEach(p=>{
-      const b=normalizeBed(p.data['ベッド番号']),m=b.match(new RegExp(`^${room.room}-(\\d+)$`));
-      if(m&&!nums.includes(+m[1]))nums.push(+m[1]);
-    });
-    nums.sort((a,b)=>a-b);
-    return{room:room.room,beds:nums.map(n=>bedKey(room.room,n))}
-  })
+  // Fixed bed map: imported patient bed numbers never create new bed slots.
+  return layout.map(room=>({room:room.room,beds:room.beds.map(n=>bedKey(room.room,n))}));
 }
 function shortAdmissionDate(v){if(!v)return'';const d=new Date(v);if(Number.isNaN(d.getTime()))return esc(v);return`${d.getMonth()+1}/${d.getDate()}`}
 function patientBedHtml(bed,p,duplicate=false){
