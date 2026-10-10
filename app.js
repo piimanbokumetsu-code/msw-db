@@ -3,7 +3,7 @@ const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const enc=new TextEncoder(), dec=new TextDecoder();
 const DB_NAME='mswdb_secure_v1', STORE='kv';
 let db=null,key=null,state=null,meta=null,screen='patients',selectedPatient=null,activeTab='basic',lockTimer=null;
-const APP_VERSION='1.0.9';
+const APP_VERSION='1.0.11-photo-candidate';
 
 const masterFields=['ベッド番号','主治医','病名','保険','本人職業','術式','入院元','かかりつけ','家構','KP職業','介護度','入院時介護度','介護連携','ケアマネ・施設','検討会','退院支援','食事','食事：介助量','水分：トロミ','排泄','排泄：介助量','排泄：尿便意','排泄：利用','移乗','移動器具','睡眠','睡眠：薬剤','高次脳','問題行動','スケール','リハ状況','DM注','コール'];
 const defaultMasters={
@@ -72,24 +72,66 @@ function bedGroup(b){b=String(b||'未配置').toUpperCase();if(b.startsWith('ICU
 function humanBytes(n){if(!n)return'0 B';const u=['B','KB','MB','GB'];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return `${n.toFixed(i?1:0)} ${u[i]}`}
 async function openDB(){return new Promise((res,rej)=>{const r=indexedDB.open(DB_NAME,1);r.onupgradeneeded=()=>r.result.createObjectStore(STORE);r.onsuccess=()=>{db=r.result;res(db)};r.onerror=()=>rej(r.error)})}
 function idbGet(k){return new Promise((res,rej)=>{const t=db.transaction(STORE,'readonly').objectStore(STORE).get(k);t.onsuccess=()=>res(t.result);t.onerror=()=>rej(t.error)})}
-function idbSet(k,v){return new Promise((res,rej)=>{const t=db.transaction(STORE,'readwrite').objectStore(STORE).put(v,k);t.onsuccess=()=>res();t.onerror=()=>rej(t.error)})}
-function idbDel(k){return new Promise((res,rej)=>{const t=db.transaction(STORE,'readwrite').objectStore(STORE).delete(k);t.onsuccess=()=>res();t.onerror=()=>rej(t.error)})}
+function idbSet(k,v){return new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');tx.oncomplete=()=>resolve();tx.onabort=()=>reject(tx.error||new Error('保存処理が中止されました'));tx.onerror=()=>reject(tx.error||new Error('保存できませんでした'));tx.objectStore(STORE).put(v,k)})}
+function idbDeletePair(){return new Promise((resolve,reject)=>{
+  const tx=db.transaction(STORE,'readwrite');
+  tx.oncomplete=()=>resolve();
+  tx.onabort=()=>reject(tx.error||new Error('全消去が中止されました'));
+  tx.onerror=()=>reject(tx.error||new Error('全消去に失敗しました'));
+  const store=tx.objectStore(STORE);
+  store.delete('data');store.delete('meta');
+})}
+// Both encrypted data and its PIN metadata must commit together.
+function idbRestorePair(newMeta,newData){return new Promise((resolve,reject)=>{
+  const tx=db.transaction(STORE,'readwrite');
+  tx.oncomplete=()=>resolve();
+  tx.onabort=()=>reject(tx.error||new Error('復元トランザクションが中止されました'));
+  tx.onerror=()=>reject(tx.error||new Error('復元データを書き込めませんでした'));
+  const store=tx.objectStore(STORE);
+  store.put(newMeta,'meta');
+  store.put(newData,'data');
+})}
+function validEncryptedBlob(v){return !!v&&typeof v==='object'&&!Array.isArray(v)&&typeof v.iv==='string'&&/^[A-Za-z0-9+/]+={0,2}$/.test(v.iv)&&typeof v.ct==='string'&&/^[A-Za-z0-9+/]+={0,2}$/.test(v.ct)&&v.ct.length>0}
+function validateBackupEnvelope(pack){
+  if(!pack||pack.format!=='MSWDB-BACKUP'||pack.version!==1||!pack.meta||typeof pack.meta!=='object'||typeof pack.meta.salt!=='string'||!validEncryptedBlob(pack.meta.check)||!validEncryptedBlob(pack.data))throw new Error('バックアップ形式が不正です');
+  const salt=unb64(pack.meta.salt),iv=unb64(pack.data.iv),checkIv=unb64(pack.meta.check.iv);
+  if(salt.length!==16||iv.length!==12||checkIv.length!==12)throw new Error('暗号化データの長さが不正です');
+  return pack;
+}
+
 function b64(a){return btoa(String.fromCharCode(...new Uint8Array(a)))} function unb64(s){return Uint8Array.from(atob(s),c=>c.charCodeAt(0))}
 async function derive(pin,salt){const km=await crypto.subtle.importKey('raw',enc.encode(pin),'PBKDF2',false,['deriveKey']);return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:250000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt'])}
 async function encryptObj(obj,k=key){const iv=crypto.getRandomValues(new Uint8Array(12));const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},k,enc.encode(JSON.stringify(obj)));return {iv:b64(iv),ct:b64(ct)}}
 async function decryptObj(blob,k=key){const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(blob.iv)},k,unb64(blob.ct));return JSON.parse(dec.decode(pt))}
-async function save(){if(!key||!state)return;state.updatedAt=nowISO();await idbSet('data',await encryptObj(state));resetAutoLock()}
+async function save(){if(!key||!state)throw new Error('ロック中は保存できません');const previous=state.updatedAt;state.updatedAt=nowISO();try{await idbSet('data',await encryptObj(state));resetAutoLock()}catch(e){state.updatedAt=previous;throw e}}
 function blankState(){return{version:APP_VERSION,patients:[],drugs:[],masters:{},settings:{retentionDays:30,autoLockMin:5,lastBackupAt:null},createdAt:nowISO(),updatedAt:nowISO()}}
 async function init(){await openDB();meta=await idbGet('meta');if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});try{if(navigator.storage?.persist)await navigator.storage.persist()}catch(e){}renderLock()}
 function renderLock(msg=''){document.getElementById('morningPrint')?.remove();const fresh=!meta;$('#app').innerHTML=`<div class="lockwrap"><div class="lockcard"><h1>MSW患者管理</h1><p>${fresh?'初回設定：この端末用の暗証を作成します。':'暗証を入力してロック解除してください。'}</p>${msg?`<div class="alert">${esc(msg)}</div>`:''}<input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="6文字以上" /><button class="btn" id="unlock" style="width:100%">${fresh?'暗証を設定':'ロック解除'}</button><p class="notice">患者情報は端末内で暗号化して保存します。暗証を忘れると復旧できません。端末自体のパスコード・紛失対策も必ず有効にしてください。</p></div></div>`;$('#unlock').onclick=fresh?setup:unlock;$('#pin').onkeydown=e=>{if(e.key==='Enter')$('#unlock').click()};setTimeout(()=>$('#pin').focus(),80)}
-async function setup(){const pin=$('#pin').value;if(pin.length<6)return renderLock('暗証は6文字以上にしてください。');const salt=crypto.getRandomValues(new Uint8Array(16));key=await derive(pin,salt);const check=await encryptObj({ok:true});meta={version:1,salt:b64(salt),check,createdAt:nowISO()};await idbSet('meta',meta);state=blankState();ensureStateSchema();await save();purgeExpired();render();}
-async function unlock(){try{const pin=$('#pin').value;key=await derive(pin,unb64(meta.salt));await decryptObj(meta.check);const blob=await idbGet('data');state=blob?await decryptObj(blob):blankState();ensureStateSchema();await save();purgeExpired();render()}catch(e){key=null;renderLock('暗証が違います。')}}
+async function setup(){const pin=$('#pin').value;if(pin.length<6)return renderLock('暗証は6文字以上にしてください。');try{const salt=crypto.getRandomValues(new Uint8Array(16));key=await derive(pin,salt);const check=await encryptObj({ok:true});const newMeta={version:1,salt:b64(salt),check,createdAt:nowISO()};state=blankState();ensureStateSchema();await idbRestorePair(newMeta,await encryptObj(state));meta=newMeta;await purgeExpired();render()}catch(e){key=null;state=null;meta=await idbGet('meta');renderLock('初期設定を保存できませんでした。再度お試しください。')}}
+async function unlock(){try{const pin=$('#pin').value;key=await derive(pin,unb64(meta.salt));await decryptObj(meta.check)}catch(e){key=null;return renderLock('暗証が違います。')}try{const blob=await idbGet('data');if(!blob)throw new Error('暗号化患者データが見つかりません');state=await decryptObj(blob);ensureStateSchema();await purgeExpired();render()}catch(e){key=null;state=null;renderLock('保存データを読み込めません。上書きせず、バックアップを確認してください。')}}
 function lock(){key=null;state=null;selectedPatient=null;clearTimeout(lockTimer);renderLock()}
 function resetAutoLock(){clearTimeout(lockTimer);if(!state)return;lockTimer=setTimeout(lock,(state.settings.autoLockMin||5)*60000)}
 ['click','touchstart','keydown'].forEach(ev=>document.addEventListener(ev,()=>{if(key)resetAutoLock()},{passive:true}));
-function purgeExpired(){if(!state)return;const d=state.settings.retentionDays??30,cut=Date.now()-d*86400000;const before=state.patients.length;state.patients=state.patients.filter(p=>!p.dischargeDate||new Date(p.dischargeDate).getTime()>cut);if(state.patients.length!==before)save()}
+// Only the time of *processing* discharge starts the 30-day retention period.
+// Legacy records without a processing timestamp must never be silently purged.
+function expiredDischarge(p,now=Date.now()){
+  if(!p.dischargeDate||!p.dischargeProcessedAt)return false;
+  const at=Date.parse(p.dischargeProcessedAt);
+  return Number.isFinite(at)&&at<=now-30*86400000;
+}
+async function purgeExpired(){
+  if(!state)return 0;
+  const patients=state.patients.filter(p=>!expiredDischarge(p));
+  const removed=state.patients.length-patients.length;
+  if(!removed)return 0;
+  // Persist first: failed writes must not remove patient records from memory.
+  const next={...state,patients,updatedAt:nowISO()};
+  await idbSet('data',await encryptObj(next));
+  state=next;
+  return removed;
+}
 function backupDue(){const t=state?.settings?.lastBackupAt;if(!t)return true;return Date.now()-new Date(t).getTime()>7*86400000}
-function render(){resetAutoLock();const net=navigator.onLine?'通信あり':'オフライン可';$('#app').innerHTML=`<div class="shell"><header class="topbar"><div class="brand">MSW患者管理</div><span class="pill">本番 Ver.${APP_VERSION}</span><span class="pill">${net}</span>${backupDue()?'<span class="pill backupwarn">要バックアップ</span>':''}<div class="spacer"></div><button class="pill" id="lockBtn">🔒</button></header><main class="content" id="main"></main><nav class="bottomnav"><button class="navbtn ${screen==='patients'?'active':''}" data-screen="patients"><span class="ico">🏥</span>患者</button><button class="navbtn ${screen==='tasks'?'active':''}" data-screen="tasks"><span class="ico">✅</span>要対応</button><button class="navbtn ${screen==='drugs'?'active':''}" data-screen="drugs"><span class="ico">💊</span>薬情</button><button class="navbtn ${screen==='masters'?'active':''}" data-screen="masters"><span class="ico">📋</span>マスター</button><button class="navbtn ${screen==='settings'?'active':''}" data-screen="settings"><span class="ico">⚙️</span>設定</button></nav></div>`;$('#lockBtn').onclick=lock;$$('.navbtn').forEach(b=>b.onclick=()=>{screen=b.dataset.screen;render()});({patients:renderPatients,tasks:renderTasks,drugs:renderDrugs,masters:renderMasters,settings:renderSettings}[screen])()}
+function render(){resetAutoLock();const net=navigator.onLine?'通信あり':'オフライン可';$('#app').innerHTML=`<div class="shell"><header class="topbar"><div class="brand">MSW患者管理</div><span class="pill">検証版 Ver.${APP_VERSION}</span><span class="pill">${net}</span>${backupDue()?'<span class="pill backupwarn">要バックアップ</span>':''}<div class="spacer"></div><button class="pill" id="lockBtn">🔒</button></header><main class="content" id="main"></main><nav class="bottomnav"><button class="navbtn ${screen==='patients'?'active':''}" data-screen="patients"><span class="ico">🏥</span>患者</button><button class="navbtn ${screen==='tasks'?'active':''}" data-screen="tasks"><span class="ico">✅</span>要対応</button><button class="navbtn ${screen==='drugs'?'active':''}" data-screen="drugs"><span class="ico">💊</span>薬情</button><button class="navbtn ${screen==='masters'?'active':''}" data-screen="masters"><span class="ico">📋</span>マスター</button><button class="navbtn ${screen==='settings'?'active':''}" data-screen="settings"><span class="ico">⚙️</span>設定</button></nav></div>`;$('#lockBtn').onclick=lock;$$('.navbtn').forEach(b=>b.onclick=()=>{screen=b.dataset.screen;render()});({patients:renderPatients,tasks:renderTasks,drugs:renderDrugs,masters:renderMasters,settings:renderSettings}[screen])()}
 function activePatients(){return state.patients.filter(p=>!p.dischargeDate)}
 function getStatus(p){return p.status||'未設定'}
 function statusTag(s){const c=s.includes('要')?'red':s.includes('決定')?'green':s.includes('施設')?'purple':s==='未設定'?'':'orange';return `<span class="tag ${c}">${esc(s)}</span>`}
@@ -141,7 +183,7 @@ function printMorningList(){
 }
 function drawPatientList(){const q=($('#q')?.value||'').trim().toLowerCase(),w=$('#ward')?.value||'',all=activePatients();const filtered=all.filter(p=>patientMatches(p,q)&&(!w||wardForBed(p.data['ベッド番号'])===w));const root=$('#patientList');if(q&&!filtered.length){root.innerHTML='<div class="empty">該当する患者がいません</div>';return}
   const general=layoutBedNumbers(BED_LAYOUT,all),icu=layoutBedNumbers(ICU_LAYOUT,all);let html='';
-  if(!w||w==='一般病棟'){html+=`<section class="map-section"><div class="map-section-title"><div><strong>一般病棟</strong><span>病室・ベッドマップ</span></div><span class="count">${general.reduce((n,r)=>n+r.beds.length,0)}床</span></div><div class="room-map">${general.map(room=>roomMapHtml(room,filtered,q)).join('')}</div></section>`}
+  if(!w||w==='一般病棟'){html+=`<section class="map-section"><div class="map-section-title"><div><strong>一般病棟</strong><span>病室・ベッドマップ</span></div><span class="count">${general.reduce((n,r)=>n+r.beds.length,0)}床</span></div><div class="room-map">${general.filter(room=>!['208','210','211','212','213'].includes(room.room)).map(room=>roomMapHtml(room,filtered,q)).join('')}<div class="compact-room-row">${general.filter(room=>['208','210','211','212','213'].includes(room.room)).map(room=>roomMapHtml(room,filtered,q)).join('')}</div></div></section>`}
   if(!w||w==='ICU'){html+=`<section class="map-section"><div class="map-section-title"><div><strong>ICU</strong><span>集中治療室</span></div><span class="count">${icu.reduce((n,r)=>n+r.beds.length,0)}床</span></div><div class="room-map icu-map">${icu.map(room=>roomMapHtml(room,filtered,q,true)).join('')}</div></section>`}
   const other=filtered.filter(p=>!isMappedBed(p.data['ベッド番号']));if((!w||w==='その他')&&other.length)html+=`<section class="map-section"><div class="map-section-title"><div><strong>その他・未配置</strong><span>標準マップ外の患者</span></div><span class="count">${other.length}人</span></div><div class="room-map">${[...new Map(other.map(p=>[normalizeBed(p.data['ベッド番号']),p.data['ベッド番号']||'未配置'])).values()].map(bed=>patientBedHtml(bed,patientsForBed(bed,filtered))).join('')}</div></section>`;
   root.innerHTML=html||'<div class="empty">該当する患者がいません</div>';bindPatientMapEvents()}
@@ -180,7 +222,7 @@ function patientBedHtml(bed,patients=[]){
   if(!patients.length)return`<button class="bed-slot empty-bed" data-new-bed="${esc(bed)}"><b>${esc(bed)}</b><span>空床</span><small>タップして登録</small></button>`;
   if(patients.length>1)return`<button class="bed-slot occupied-bed duplicate-bed" data-bed="${esc(bed)}"><div class="bed-line"><b>${esc(bed)}</b></div><strong>${patients.length}名重複あり</strong><span>タップして全員を表示</span></button>`;
   const p=patients[0],days=daysSince(p.data['入院日'])||p.data['入院日数']||'',date=shortAdmissionDate(p.data['入院日']),tasks=p.tasks?.filter(t=>!t.done).length||0;
-  return`<button class="bed-slot occupied-bed" data-id="${esc(p.id)}"><div class="bed-line"><b>${esc(bed)}</b></div><strong>${esc(p.data['氏名']||'氏名未入力')}</strong><span>${date?`${date}入院`:''}${days?`　${esc(days)}日目`:''}</span><span>${esc(p.data['主治医']||'')}</span><div class="tags">${statusTag(getStatus(p))}${tasks?`<span class="tag red">要対応 ${tasks}</span>`:''}</div></button>`;
+  return`<button class="bed-slot occupied-bed" data-id="${esc(p.id)}"><div class="bed-line"><b>${esc(bed)}</b></div><strong>${esc(p.data['氏名']||'氏名未入力')}</strong><span class="bed-meta-line">${esc([date?`${date}入院`:'',String(p.data['主治医']||'').replace(/医師\s*$/,'').trim(),days?`${days}日目`:''].filter(Boolean).join('　'))}</span><div class="tags">${statusTag(getStatus(p))}${tasks?`<span class="tag red">要対応 ${tasks}</span>`:''}</div></button>`;
 }
 function roomMapHtml(room,patients,q){
   return`<div class="room-block"><div class="room-title">${esc(room.room)}</div><div class="bed-grid">${room.beds.map(bed=>{const ps=patientsForBed(bed,patients);if(q&&!ps.length)return'';return patientBedHtml(bed,ps)}).join('')}</div></div>`;
@@ -213,9 +255,132 @@ function bindPatientMapEvents(){
 }function patientCard(p){const days=daysSince(p.data['入院日'])||p.data['入院日数']||'';const tasks=p.tasks?.filter(t=>!t.done).length||0;return `<article class="patient-card" data-id="${p.id}"><div class="pc-head"><span class="bed">${esc(p.data['ベッド番号']||'未配置')}</span><span class="name">${esc(p.data['氏名']||'氏名未入力')}</span></div><div class="pc-meta"><span>主治医 ${esc(p.data['主治医']||'-')}</span><span>入院 ${esc(days)}日</span><span>${esc(p.data['病名']||'')}</span></div><div class="tags">${statusTag(getStatus(p))}${tasks?`<span class="tag red">要対応 ${tasks}</span>`:''}</div></article>`}
 function newPatient(bed=''){const data={};legacyFields.forEach(k=>data[k]='');data['ベッド番号']=bed;return{id:uid(),data,status:'未設定',tasks:[],notes:[],dischargeDate:null,createdAt:nowISO(),updatedAt:nowISO(),_new:true}}
 function openPatient(p){selectedPatient=p;activeTab='basic';renderPatientModal()}
-function renderPatientModal(){const p=selectedPatient;document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="sheet"><div class="sheethead"><button class="btn secondary" id="closeM">←</button><div><h2>${esc(p.data['氏名']||'新規患者')}</h2><div class="notice">${esc(p.data['ベッド番号']||'病床未設定')}　${esc(p.data['病名']||'')}</div></div><div class="spacer"></div><button class="btn" id="saveP">保存</button></div><div class="tabs">${[['basic','基本'],['care','家族・介護'],['adl','ADL'],['support','退院支援'],['notes','経過記録']].map(([k,n])=>`<button class="tab ${activeTab===k?'active':''}" data-tab="${k}">${n}</button>`).join('')}</div><div class="sheetbody" id="tabbody"></div></div></div>`);$('#closeM').onclick=closePatient;$('#saveP').onclick=savePatientFromForm;$$('.tab').forEach(t=>t.onclick=()=>{saveFieldsOnly();activeTab=t.dataset.tab;$('#modal').remove();renderPatientModal()});renderTab()}
+function renderPatientModal(){const p=selectedPatient;document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="modal"><div class="sheet"><div class="sheethead"><button class="btn secondary" id="closeM">←</button><div><h2>${esc(p.data['氏名']||'新規患者')}</h2><div class="notice">${esc(p.data['ベッド番号']||'病床未設定')}　${esc(p.data['病名']||'')}</div></div><div class="spacer"></div><button class="btn" id="saveP">保存</button></div><div class="tabs">${[['basic','基本'],['care','家族・介護'],['adl','ADL'],['support','退院支援'],['notes','経過記録'],['genogram','ジェノグラム'],['admissionDoc','入院時情報提供書']].map(([k,n])=>`<button class="tab ${activeTab===k?'active':''}" data-tab="${k}">${n}</button>`).join('')}</div><div class="sheetbody" id="tabbody"></div></div></div>`);$('#closeM').onclick=closePatient;$('#saveP').onclick=savePatientFromForm;$$('.tab').forEach(t=>t.onclick=()=>{saveFieldsOnly();activeTab=t.dataset.tab;$('#modal').remove();renderPatientModal()});renderTab()}
 function closePatient(){if(selectedPatient?._new)selectedPatient=null;$('#modal')?.remove()}
-function renderTab(){const root=$('#tabbody'),p=selectedPatient;if(groups[activeTab]){root.innerHTML=`<div class="panel"><div class="form-grid">${groups[activeTab].map(fieldHtml).join('')}</div></div>`;bindMasterSelects(root);return}if(activeTab==='support'){root.innerHTML=`<div class="panel"><h3>退院支援</h3><div class="form-grid"><div class="field"><label>進捗ステータス</label>${masterSelectHtml('進捗ステータス',getStatus(p),'id="status"')}</div><div class="field"><label>退院日</label><input type="date" id="dischargeDate" value="${esc(p.dischargeDate||'')}"></div><div class="field span2"><label>退院支援メモ</label><textarea data-field="退院支援">${esc(p.data['退院支援']||'')}</textarea></div></div></div><div class="panel"><h3>要対応タスク</h3><div id="taskList">${taskListHtml(p)}</div><div class="toolbar"><input id="newTask" placeholder="例：長女へ電話、施設へ空床確認"><button class="btn" id="addTask">追加</button></div></div><div class="panel"><button class="btn danger" id="dischargeNow">退院として登録</button><p class="notice">退院後は設定した保持日数を過ぎると自動削除されます。</p></div>`;$('#addTask').onclick=addTask;$('#dischargeNow').onclick=()=>{if(!$('#dischargeDate').value)$('#dischargeDate').value=new Date().toISOString().slice(0,10);$('#status').value='退院先決定';};bindTaskChecks();bindMasterSelects(root);return}if(activeTab==='notes'){root.innerHTML=`<div class="panel"><h3>経過記録を追加</h3><div class="form-grid"><div class="field"><label>種別</label>${masterSelectHtml('経過記録種別','面談','id="noteType"')}</div><div class="field"><label>日時</label><input id="noteAt" type="datetime-local" value="${new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16)}"></div><div class="field span2"><label>内容</label><textarea id="noteText" placeholder="対応内容・決定事項・次にやること"></textarea></div></div><button class="btn" id="addNote">記録追加</button></div><div class="panel"><h3>時系列</h3><div class="timeline">${notesHtml(p)}</div></div>`;$('#addNote').onclick=addNote;bindMasterSelects(root);return}}
+function renderTab(){const root=$('#tabbody'),p=selectedPatient;if(activeTab==='genogram'){renderGenogramTab();return}if(activeTab==='admissionDoc'){renderAdmissionDocTab();return}if(groups[activeTab]){root.innerHTML=`<div class="panel"><div class="form-grid">${groups[activeTab].map(fieldHtml).join('')}</div></div>`;bindMasterSelects(root);return}if(activeTab==='support'){root.innerHTML=`<div class="panel"><h3>退院支援</h3><div class="form-grid"><div class="field"><label>進捗ステータス</label>${masterSelectHtml('進捗ステータス',getStatus(p),'id="status"')}</div><div class="field"><label>退院日</label><input type="date" id="dischargeDate" value="${esc(p.dischargeDate||'')}"></div><div class="field span2"><label>退院支援メモ</label><textarea data-field="退院支援">${esc(p.data['退院支援']||'')}</textarea></div></div></div><div class="panel"><h3>要対応タスク</h3><div id="taskList">${taskListHtml(p)}</div><div class="toolbar"><input id="newTask" placeholder="例：長女へ電話、施設へ空床確認"><button class="btn" id="addTask">追加</button></div></div><div class="panel"><button class="btn danger" id="dischargeNow">退院として登録</button><p class="notice">退院後は設定した保持日数を過ぎると自動削除されます。</p></div>`;$('#addTask').onclick=addTask;$('#dischargeNow').onclick=()=>{if(!$('#dischargeDate').value)$('#dischargeDate').value=new Date().toISOString().slice(0,10);$('#status').value='退院先決定';};bindTaskChecks();bindMasterSelects(root);return}if(activeTab==='notes'){root.innerHTML=`<div class="panel"><h3>経過記録を追加</h3><div class="form-grid"><div class="field"><label>種別</label>${masterSelectHtml('経過記録種別','面談','id="noteType"')}</div><div class="field"><label>日時</label><input id="noteAt" type="datetime-local" value="${new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16)}"></div><div class="field span2"><label>内容</label><textarea id="noteText" placeholder="対応内容・決定事項・次にやること"></textarea></div></div><button class="btn" id="addNote">記録追加</button></div><div class="panel"><h3>時系列</h3><div class="timeline">${notesHtml(p)}</div></div>`;$('#addNote').onclick=addNote;bindMasterSelects(root);return}}
+// Preview implementation: one encrypted genogram image per patient.
+function renderGenogramTab(){
+  const p=selectedPatient, root=$('#tabbody');
+  const has=!!p.genogramImage;
+  root.innerHTML=`<div class="panel"><h3>ジェノグラム</h3><p class="notice">この端末内に暗号化して保存します。撮影後に確認してください。</p>
+    ${has?`<img id="genogramPreview" alt="ジェノグラム" src="${p.genogramImage}" style="display:block;max-width:100%;max-height:320px;object-fit:contain;margin:12px 0;cursor:zoom-in">`: '<div class="empty">まだ登録されていません</div>'}
+    <input id="genogramInput" type="file" accept="image/*" capture="environment" style="display:none">
+    <button class="btn" id="genogramTake">${has?'撮り直す':'撮影・写真を選ぶ'}</button>
+    ${has?'<button class="btn secondary" id="genogramDelete">写真を削除</button>':''}</div>`;
+  $('#genogramTake').onclick=()=>$('#genogramInput').click();
+  $('#genogramInput').onchange=async e=>{
+    const file=e.target.files?.[0];if(!file)return;
+    if(!file.type.startsWith('image/'))return alert('画像ファイルを選んでください。');
+    try{
+      const url=await genogramResize(file);
+      const viewer=document.createElement('div');viewer.className='modal';viewer.id='genogramConfirm';
+      viewer.innerHTML=`<div class="sheet" style="padding:16px"><h2>写真を確認</h2><img alt="保存前の写真" style="max-width:100%;max-height:65vh;object-fit:contain"><div class="toolbar"><button class="btn secondary" id="genogramCancel">撮り直す・キャンセル</button><button class="btn" id="genogramSave">この写真を保存</button></div></div>`;
+      document.body.appendChild(viewer);viewer.querySelector('img').src=url;
+      $('#genogramCancel').onclick=()=>viewer.remove();
+      $('#genogramSave').onclick=async()=>{
+        const saveButton=$('#genogramSave');
+        if(saveButton.disabled)return;
+        saveButton.disabled=true;
+        if(p._new){alert('先に患者情報を保存してから写真を登録してください。');viewer.remove();return}
+        const previous=p.genogramImage;p.genogramImage=url;
+        try{await save();viewer.remove();renderGenogramTab()}catch(err){p.genogramImage=previous;saveButton.disabled=false;alert('写真を保存できませんでした。空き容量をご確認ください。')}
+      };
+    }catch(err){alert('画像を読み込めませんでした。別の写真でお試しください。')}
+  };
+  if(has){
+    $('#genogramPreview').onclick=()=>{const w=window.open('','_blank');if(w){w.document.title='ジェノグラム';const img=w.document.createElement('img');img.src=p.genogramImage;img.style.cssText='max-width:100%;height:auto';w.document.body.appendChild(img)}};
+    $('#genogramDelete').onclick=async()=>{if(!confirm('ジェノグラムの写真を削除しますか？'))return;const old=p.genogramImage;delete p.genogramImage;try{await save();renderGenogramTab()}catch(err){p.genogramImage=old;alert('削除を保存できませんでした。')}};
+  }
+}
+// Safari/iPad may not expose createImageBitmap for camera/HEIC images.
+// Fall back to the browser image decoder without uploading the original file.
+async function decodeLocalPhoto(file){
+  if(typeof createImageBitmap==='function'){
+    try{return await createImageBitmap(file)}catch(e){/* use local Image decoder */}
+  }
+  const objectURL=URL.createObjectURL(file);
+  try{
+    return await new Promise((resolve,reject)=>{
+      const image=new Image();
+      image.onload=()=>resolve(image);
+      image.onerror=()=>reject(Error('画像を読み込めません'));
+      image.src=objectURL;
+    });
+  }finally{URL.revokeObjectURL(objectURL)}
+}
+async function genogramResize(file){
+  const bitmap=await decodeLocalPhoto(file);
+  try{
+    const width=bitmap.width||bitmap.naturalWidth,height=bitmap.height||bitmap.naturalHeight;
+    if(!width||!height)throw Error('invalid image dimensions');
+    const scale=Math.min(1,1800/Math.max(width,height));
+    const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(width*scale));canvas.height=Math.max(1,Math.round(height*scale));
+    canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);
+    const result=canvas.toDataURL('image/jpeg',0.78);
+    if(!result.startsWith('data:image/jpeg;base64,')||result.length>2500000)throw Error('image too large');return result;
+  }finally{if(typeof bitmap.close==='function')bitmap.close()}
+}
+// Local-only manual photo adjustment. Original capture remains untouched until Save.
+async function adjustDocumentImage(source, rotation=0, margin=0){
+  const img=await new Promise((resolve,reject)=>{const el=new Image();el.onload=()=>resolve(el);el.onerror=reject;el.src=source});
+  const w=img.naturalWidth,h=img.naturalHeight;
+  const inset=Math.floor(Math.min(w,h)*margin/100);
+  const cw=w-2*inset,ch=h-2*inset;
+  if(cw<20||ch<20)throw Error('crop too small');
+  const turn=((rotation%360)+360)%360;
+  const swap=turn===90||turn===270;
+  const canvas=document.createElement('canvas');canvas.width=swap?ch:cw;canvas.height=swap?cw:ch;
+  const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.translate(canvas.width/2,canvas.height/2);ctx.rotate(turn*Math.PI/180);
+  ctx.drawImage(img,inset,inset,cw,ch,-cw/2,-ch/2,cw,ch);
+  return canvas.toDataURL('image/jpeg',0.78);
+}
+// Development preview: encrypted multi-page document images, assembled into a PDF for viewing.
+function renderAdmissionDocTab(){
+  const p=selectedPatient,root=$('#tabbody'),pages=p.admissionDocPages||[];
+  root.innerHTML=`<div class="panel"><h3>入院時情報提供書</h3><p class="notice">各ページは暗号化した患者データに保存します。撮影後に確認してから登録してください。PDF表示は端末内で一時生成します。</p>
+  <div id="docPages">${pages.length?pages.map((pg,i)=>`<div class="panel" style="margin:10px 0"><div><b>${i+1}ページ目</b></div><img data-page="${i}" alt="${i+1}ページ目" src="${pg.image}" style="max-width:100%;max-height:210px;object-fit:contain;display:block;margin:8px 0"><div class="toolbar"><button class="btn secondary" data-move="up" data-index="${i}" ${i===0?'disabled':''}>↑前へ</button><button class="btn secondary" data-move="down" data-index="${i}" ${i===pages.length-1?'disabled':''}>↓次へ</button><button class="btn secondary" data-retake="${i}">撮り直し</button><button class="btn danger" data-delete="${i}">削除</button></div></div>`).join(''):'<div class="empty">まだ書類は登録されていません</div>'}</div>
+  <input id="docInput" type="file" accept="image/*" capture="environment" style="display:none"><button class="btn" id="docAdd">＋ ページを撮影・追加</button> ${pages.length?'<button class="btn secondary" id="docView">PDFで確認</button>':''}<p class="notice">撮影後に90°回転・周囲の余白カットができます。台形・細かな傾き補正は未実装です。ページ順は矢印で変更できます。</p></div>`;
+  let replaceIndex=null;
+  $('#docAdd').onclick=()=>{replaceIndex=null;$('#docInput').click()};
+  root.querySelectorAll('[data-retake]').forEach(b=>b.onclick=()=>{replaceIndex=Number(b.dataset.retake);$('#docInput').click()});
+  root.querySelectorAll('[data-move]').forEach(b=>b.onclick=async()=>{const i=Number(b.dataset.index),j=i+(b.dataset.move==='up'?-1:1);if(j<0||j>=pages.length)return;[pages[i],pages[j]]=[pages[j],pages[i]];try{await save();renderAdmissionDocTab()}catch(e){[pages[i],pages[j]]=[pages[j],pages[i]];alert('並び替えを保存できませんでした。')}});
+  root.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{const i=Number(b.dataset.delete);if(!confirm(`${i+1}ページ目を削除しますか？`))return;const removed=pages.splice(i,1)[0];try{await save();renderAdmissionDocTab()}catch(e){pages.splice(i,0,removed);alert('削除を保存できませんでした。')}});
+  $('#docInput').onchange=async e=>{const f=e.target.files?.[0];e.target.value='';if(!f)return;if(!f.type.startsWith('image/'))return alert('画像を選んでください。');
+    try{const image=await genogramResize(f);const viewer=document.createElement('div');viewer.className='modal';viewer.innerHTML=`<div class="sheet" style="padding:16px"><h2>ページを確認・補正</h2><p class="notice">回転と周囲の余白カットを調整できます。台形・斜め撮影の自動補正は未対応です。</p><img alt="保存前のページ" style="max-width:100%;max-height:45vh;object-fit:contain"><div class="toolbar"><button class="btn secondary" id="docRotate">90°回転</button><label>余白カット <input id="docCrop" type="range" min="0" max="20" value="0" step="1"></label><span id="docCropValue">0%</span></div><div class="toolbar"><button class="btn secondary" id="docCancel">キャンセル</button><button class="btn" id="docSave">このページを保存</button></div></div>`;document.body.appendChild(viewer);
+    let adjusted=image,rotation=0,margin=0,updateSequence=0;
+    const preview=viewer.querySelector('img'),saveButton=viewer.querySelector('#docSave');preview.src=image;
+    const refresh=async()=>{const seq=++updateSequence;saveButton.disabled=true;try{const result=await adjustDocumentImage(image,rotation,margin);if(seq!==updateSequence)return;adjusted=result;preview.src=result;saveButton.disabled=false;}catch(err){if(seq===updateSequence)alert('画像の補正に失敗しました。')}};
+    viewer.querySelector('#docRotate').onclick=()=>{rotation=(rotation+90)%360;refresh()};
+    viewer.querySelector('#docCrop').oninput=e=>{margin=Number(e.target.value);viewer.querySelector('#docCropValue').textContent=margin+'%';refresh()};
+    viewer.querySelector('#docCancel').onclick=()=>viewer.remove();viewer.querySelector('#docSave').onclick=async()=>{if(saveButton.disabled)return;saveButton.disabled=true;if(p._new){alert('先に患者情報を保存してください。');viewer.remove();return}const pg={image:adjusted,createdAt:nowISO()},old=replaceIndex===null?null:pages[replaceIndex];if(replaceIndex===null)pages.push(pg);else pages[replaceIndex]=pg;try{p.admissionDocPages=pages;await save();viewer.remove();renderAdmissionDocTab()}catch(err){if(replaceIndex===null)pages.pop();else pages[replaceIndex]=old;saveButton.disabled=false;alert('ページを保存できませんでした。容量をご確認ください。')}};
+    }catch(err){alert('画像を読み込めませんでした。')}};
+  if(pages.length)$('#docView').onclick=async()=>{try{const pdf=await buildAdmissionPdf(pages);const url=URL.createObjectURL(pdf);const w=window.open(url,'_blank');if(!w){URL.revokeObjectURL(url);alert('PDFを開けませんでした。ポップアップ設定をご確認ください。')}else setTimeout(()=>URL.revokeObjectURL(url),120000)}catch(err){alert('PDFの生成に失敗しました。')}};
+}
+// Minimal offline PDF generator: one JPEG image per A4 page, no external server or library.
+async function buildAdmissionPdf(pages){
+  const te=new TextEncoder(),parts=[],offsets=[0];let length=0;
+  const add=b=>{const v=typeof b==='string'?te.encode(b):b;parts.push(v);length+=v.length};
+  const obj=(id,body)=>{offsets[id]=length;add(`${id} 0 obj\n`);add(body);add('\nendobj\n')};
+  const n=pages.length;add('%PDF-1.4\n');
+  obj(1,'<< /Type /Catalog /Pages 2 0 R >>');
+  obj(2,`<< /Type /Pages /Kids [${pages.map((_,i)=>`${3+i*3} 0 R`).join(' ')}] /Count ${n} >>`);
+  for(let i=0;i<n;i++){
+    const base=3+i*3,src=pages[i].image;
+    if(!src.startsWith('data:image/jpeg;base64,'))throw Error('JPEG required');
+    const bytes=unb64(src.slice(src.indexOf(',')+1));
+    const img=await new Promise((resolve,reject)=>{const el=new Image();el.onload=()=>resolve({w:el.naturalWidth,h:el.naturalHeight});el.onerror=reject;el.src=src});
+    const scale=Math.min(555/img.w,802/img.h),w=img.w*scale,h=img.h*scale,x=(595-w)/2,y=(842-h)/2;
+    obj(base,`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /XObject << /Im${i} ${base+1} 0 R >> >> /Contents ${base+2} 0 R >>`);
+    offsets[base+1]=length;add(`${base+1} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${img.w} /Height ${img.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${bytes.length} >>\nstream\n`);add(bytes);add('\nendstream\nendobj\n');
+    const cmd=`q\n${w.toFixed(3)} 0 0 ${h.toFixed(3)} ${x.toFixed(3)} ${y.toFixed(3)} cm\n/Im${i} Do\nQ\n`;
+    obj(base+2,`<< /Length ${te.encode(cmd).length} >>\nstream\n${cmd}endstream`);
+  }
+  const xref=length,total=2+n*3;add(`xref\n0 ${total+1}\n0000000000 65535 f \n`);
+  for(let i=1;i<=total;i++)add(`${String(offsets[i]).padStart(10,'0')} 00000 n \n`);
+  add(`trailer\n<< /Size ${total+1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`);
+  return new Blob(parts,{type:'application/pdf'});
+}
 function fieldHtml(f){
   const v=selectedPatient.data[f]??'';
   const long=['備考'].includes(f);
@@ -224,13 +389,56 @@ function fieldHtml(f){
   if(masterFields.includes(f))return `<div class="field ${span}"><label>${esc(f)}</label>${masterSelectHtml(f,v)}</div>`;
   return `<div class="field ${span}"><label>${esc(f)}</label>${long?`<textarea data-field="${esc(f)}">${esc(v)}</textarea>`:`<input data-field="${esc(f)}" type="${type}" value="${esc(v)}">`}</div>`;
 }
-function saveFieldsOnly(){if(!selectedPatient)return;$$('[data-field]').forEach(el=>selectedPatient.data[el.dataset.field]=el.value);if($('#status'))selectedPatient.status=$('#status').value;if($('#dischargeDate'))selectedPatient.dischargeDate=$('#dischargeDate').value||null}
-async function savePatientFromForm(){saveFieldsOnly();if(!selectedPatient.data['氏名']&&!selectedPatient.data['ＩＤ'])return alert('氏名または患者IDを入力してください。');selectedPatient.updatedAt=nowISO();if(selectedPatient._new){delete selectedPatient._new;state.patients.push(selectedPatient)}await save();$('#modal').remove();selectedPatient=null;render()}
+function saveFieldsOnly(){
+  if(!selectedPatient)return;
+  $$('[data-field]').forEach(el=>selectedPatient.data[el.dataset.field]=el.value);
+  if($('#status'))selectedPatient.status=$('#status').value;
+  if($('#dischargeDate')){
+    const wasDischarged=!!selectedPatient.dischargeDate;
+    const date=$('#dischargeDate').value||null;
+    selectedPatient.dischargeDate=date;
+    if(!date)selectedPatient.dischargeProcessedAt=null;
+    else if(!wasDischarged)selectedPatient.dischargeProcessedAt=nowISO();
+  }
+}
+async function savePatientFromForm(){
+  if(!selectedPatient)return;
+  const patient=selectedPatient;
+  const snapshot=JSON.parse(JSON.stringify(patient));
+  const wasNew=!!patient._new;
+  try{
+    saveFieldsOnly();
+    if(!patient.data['氏名']&&!patient.data['ＩＤ']){Object.keys(patient).forEach(k=>delete patient[k]);Object.assign(patient,snapshot);return alert('氏名または患者IDを入力してください。')}
+    patient.updatedAt=nowISO();
+    if(wasNew){delete patient._new;state.patients.push(patient)}
+    await save();
+    $('#modal').remove();selectedPatient=null;render();
+  }catch(e){
+    if(wasNew)state.patients=state.patients.filter(p=>p!==patient);
+    Object.keys(patient).forEach(k=>delete patient[k]);Object.assign(patient,snapshot);
+    alert('患者情報を保存できませんでした。入力内容を確認し、もう一度お試しください。');
+  }
+}
 function taskListHtml(p){if(!p.tasks?.length)return'<div class="empty">タスクなし</div>';return p.tasks.map((t,i)=>`<label class="settings-row"><span><input type="checkbox" data-task="${i}" ${t.done?'checked':''}> ${esc(t.text)}</span><small>${fmtDate(t.createdAt)}</small></label>`).join('')}
-function bindTaskChecks(){$$('[data-task]').forEach(c=>c.onchange=()=>{selectedPatient.tasks[+c.dataset.task].done=c.checked;save()})}
-function addTask(){const el=$('#newTask'),v=el.value.trim();if(!v)return;selectedPatient.tasks??=[];selectedPatient.tasks.push({id:uid(),text:v,done:false,createdAt:nowISO()});$('#taskList').innerHTML=taskListHtml(selectedPatient);el.value='';bindTaskChecks();save()}
+function bindTaskChecks(){$$('[data-task]').forEach(c=>c.onchange=async()=>{
+  const task=selectedPatient?.tasks?.[+c.dataset.task];if(!task)return;
+  const before=task.done;task.done=c.checked;
+  try{await save()}catch(e){task.done=before;c.checked=before;alert('タスクの変更を保存できませんでした。')}
+})}
+async function addTask(){const el=$('#newTask'),v=el.value.trim();if(!v||!selectedPatient)return;
+  const patient=selectedPatient;patient.tasks??=[];
+  const task={id:uid(),text:v,done:false,createdAt:nowISO()};patient.tasks.push(task);
+  try{await save();if(selectedPatient!==patient)return;$('#taskList').innerHTML=taskListHtml(patient);el.value='';bindTaskChecks()}
+  catch(e){patient.tasks=patient.tasks.filter(t=>t!==task);alert('タスクを保存できませんでした。')}
+}
 function notesHtml(p){const a=[...(p.notes||[])].sort((a,b)=>String(b.at).localeCompare(String(a.at)));if(!a.length)return'<div class="empty">経過記録はまだありません</div>';return a.map(n=>`<div class="note"><div class="time">${fmtDate(n.at)} ${new Date(n.at).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})}</div><div class="type">${esc(n.type)}</div><div>${esc(n.text).replace(/\n/g,'<br>')}</div></div>`).join('')}
-function addNote(){const txt=$('#noteText').value.trim();if(!txt)return;selectedPatient.notes??=[];selectedPatient.notes.push({id:uid(),type:$('#noteType').value,at:new Date($('#noteAt').value).toISOString(),text:txt});save();activeTab='notes';$('#modal').remove();renderPatientModal()}
+async function addNote(){const txt=$('#noteText').value.trim();if(!txt||!selectedPatient)return;
+  const patient=selectedPatient;patient.notes??=[];
+  const date=new Date($('#noteAt').value);if(Number.isNaN(date.getTime()))return alert('記録日時を確認してください。');
+  const note={id:uid(),type:$('#noteType').value,at:date.toISOString(),text:txt};patient.notes.push(note);
+  try{await save();activeTab='notes';$('#modal').remove();renderPatientModal()}
+  catch(e){patient.notes=patient.notes.filter(n=>n!==note);alert('経過記録を保存できませんでした。入力内容は残っています。')}
+}
 function renderTasks(){const rows=[];activePatients().forEach(p=>(p.tasks||[]).filter(t=>!t.done).forEach(t=>rows.push({p,t})));$('#main').innerHTML=`<div class="hero"><div><h1>要対応</h1><p>患者横断の未完了タスクです。</p></div></div>${rows.length?`<div class="panel">${rows.map(({p,t})=>`<div class="settings-row taskjump" data-id="${p.id}"><div><b>${esc(p.data['氏名'])}</b> <span class="tag">${esc(p.data['ベッド番号'])}</span><small>${esc(t.text)}</small></div><span>›</span></div>`).join('')}</div>`:'<div class="empty">未完了タスクはありません</div>'}`;$$('.taskjump').forEach(x=>x.onclick=()=>openPatient(state.patients.find(p=>p.id===x.dataset.id)))}
 function renderDrugs(){const ds=state.drugs||[];$('#main').innerHTML=`<div class="hero"><div><h1>薬情</h1><p>端末内の簡易薬剤マスター。患者処方そのものは保存しません。</p></div></div><div class="toolbar"><input id="dq" placeholder="薬名・分類・薬効で検索"></div><div id="drugList"></div>`;$('#dq').oninput=drawDrugs;drawDrugs()}
 function drawDrugs(){const q=($('#dq')?.value||'').toLowerCase().trim();const a=(state.drugs||[]).filter(d=>!q||[d['薬名'],d['医薬品分類'],d['薬効']].join(' ').toLowerCase().includes(q)).slice(0,100);$('#drugList').innerHTML=a.length?`<div class="drug-list">${a.map(d=>`<article class="drug"><b>${esc(d['薬名'])}</b><div class="small">${esc(d['医薬品分類'])}　${esc(d['薬価'])}</div><div class="effect">${esc(d['薬効'])}</div></article>`).join('')}</div>`:'<div class="empty">薬剤データがありません。設定から「薬剤CSV」を読み込んでください。</div>'}
@@ -260,16 +468,15 @@ async function renderSettings(){
   $('#main').innerHTML=`<div class="hero"><div><h1>設定</h1><p>移行・バックアップ・容量・セキュリティを管理します。</p></div></div>
   <div class="panel"><h3>データ移行</h3><div class="settings-row"><div><b>患者CSVを読み込む</b><small>旧FileMakerから出した患者情報CSV。重複患者IDは更新します。</small></div><button class="btn secondary" id="impP">読込</button></div><div class="settings-row"><div><b>薬剤CSVを読み込む</b><small>医薬品分類・薬価・薬効・薬名の4列。</small></div><button class="btn secondary" id="impD">読込</button></div></div>
   <div class="panel"><h3>FileMaker最新データで入れ替え（試験用）</h3><div class="settings-row"><div><b>患者CSVで全件入れ替え</b><small>患者データのみを全件置換します。薬剤・マスター・設定は保持します。患者ID（番号）必須。実行前に件数を確認します。</small></div><button class="btn danger" id="replaceP">全件入れ替え</button></div></div>
-  <div class="panel"><h3>退院患者の自動削除</h3><div class="settings-row"><div><b>保持日数</b><small>退院日からこの日数を過ぎた患者を完全削除。</small></div><select id="retention"><option value="0">即時</option><option value="7">7日</option><option value="30">30日</option><option value="60">60日</option></select></div><div class="settings-row"><div><b>退院済み</b><small>${state.patients.filter(p=>p.dischargeDate).length}人</small></div><button class="btn danger" id="purge">期限超過を削除</button></div></div>
+  <div class="panel"><h3>退院患者の自動削除</h3><div class="settings-row"><div><b>保持日数</b><small>退院処理から30日後に自動削除。旧データで処理日時が不明な患者は自動削除しません。</small></div><span>30日固定</span></div><div class="settings-row"><div><b>退院済み</b><small>${state.patients.filter(p=>p.dischargeDate).length}人</small></div><button class="btn danger" id="purge">期限超過を削除</button></div></div>
   <div class="panel"><h3>セキュリティ</h3><div class="settings-row"><div><b>自動ロック</b><small>無操作時に暗証画面へ戻ります。</small></div><select id="autolock"><option value="1">1分</option><option value="5">5分</option><option value="10">10分</option><option value="30">30分</option></select></div><div class="settings-row"><div><b>暗証を変更</b><small>現在の暗証を確認後、新しい暗証でDBを再暗号化します。</small></div><button class="btn secondary" id="changePin">変更</button></div></div>
   <div class="panel"><h3>バックアップ</h3><div class="settings-row"><div><b>暗号化バックアップ</b><small>患者・薬剤・経過記録・マスターを暗号化したまま書き出します。<br>最終：${esc(last)}</small></div><button class="btn secondary" id="backup">書出</button></div><div class="settings-row"><div><b>バックアップ復元</b><small>.mswdb ファイルを読み込みます。</small></div><button class="btn secondary" id="restore">復元</button></div></div>
-  <div class="panel"><h3>端末保存</h3><div class="settings-row"><div><b>保存領域</b><small>${esc(persisted)} / 使用量 ${humanBytes(usage)}${quota?' / 上限目安 '+humanBytes(quota):''}</small></div><button class="btn secondary" id="persist">保持を要求</button></div><div class="storagebar"><div style="width:${pct}%"></div></div><p class="notice">iPadではホーム画面から起動してください。写真・PDFは保存しない設計なので、患者情報は非常に小容量です。</p></div>
+  <div class="panel"><h3>端末保存</h3><div class="settings-row"><div><b>保存領域</b><small>${esc(persisted)} / 使用量 ${humanBytes(usage)}${quota?' / 上限目安 '+humanBytes(quota):''}</small></div><button class="btn secondary" id="persist">保持を要求</button></div><div class="storagebar"><div style="width:${pct}%"></div></div><p class="notice">iPadではホーム画面から起動してください。写真は患者データとともに端末内で暗号化保存されます。容量不足に備え、定期的に暗号化バックアップを保存してください。</p></div>
   <div class="panel"><h3>初期化</h3><div class="settings-row"><div><b>この端末のMSW-DBを全消去</b><small>患者・薬剤・マスター・暗証をすべて削除します。復元にはバックアップが必要です。</small></div><button class="btn danger" id="resetAll">全消去</button></div></div>
-  <div class="panel"><div class="notice">MSW-DB 本番 Ver.${APP_VERSION} / 在院 ${activePatients().length}人 / 薬剤 ${state.drugs.length}件</div></div>`;
-  $('#retention').value=String(state.settings.retentionDays??30);$('#autolock').value=String(state.settings.autoLockMin??5);
-  $('#retention').onchange=async e=>{state.settings.retentionDays=+e.target.value;purgeExpired();await save()};
+  <div class="panel"><div class="notice">MSW-DB 検証版 Ver.${APP_VERSION} / 在院 ${activePatients().length}人 / 薬剤 ${state.drugs.length}件</div></div>`;
+  $('#autolock').value=String(state.settings.autoLockMin??5);
   $('#autolock').onchange=async e=>{state.settings.autoLockMin=+e.target.value;await save();resetAutoLock()};
-  $('#purge').onclick=async()=>{if(!confirm('保持期限を超えた退院患者を完全削除します。よろしいですか？'))return;purgeExpired();await save();renderSettings()};
+  $('#purge').onclick=async()=>{if(!confirm('保持期限を超えた退院患者を完全削除します。よろしいですか？'))return;try{await purgeExpired();renderSettings()}catch(e){alert('削除結果を保存できませんでした。患者情報は保持されています。')}};
   $('#replaceP').onclick=()=>pickFile('.csv',replacePatientsFromFileMaker);
   $('#impP').onclick=()=>pickFile('.csv',importPatients);$('#impD').onclick=()=>pickFile('.csv',importDrugs);
   $('#backup').onclick=backup;$('#restore').onclick=()=>pickFile('.mswdb,application/json',restore);
@@ -283,12 +490,23 @@ async function changePin(){
   const np=prompt('新しい暗証（6文字以上）を入力してください');if(np===null)return;if(np.length<6)return alert('6文字以上にしてください。');
   const np2=prompt('確認のため新しい暗証をもう一度入力してください');if(np!==np2)return alert('新しい暗証が一致しません。');
   const salt=crypto.getRandomValues(new Uint8Array(16));const newKey=await derive(np,salt);const newMeta={version:1,salt:b64(salt),check:await encryptObj({ok:true},newKey),createdAt:meta.createdAt||nowISO(),changedAt:nowISO()};
-  state.updatedAt=nowISO();await idbSet('data',await encryptObj(state,newKey));await idbSet('meta',newMeta);meta=newMeta;key=newKey;alert('暗証を変更しました。新しい暗証は忘れないでください。');
+  const previousUpdatedAt=state.updatedAt;
+  try{
+    state.updatedAt=nowISO();
+    const encrypted=await encryptObj(state,newKey);
+    await idbRestorePair(newMeta,encrypted);
+    meta=newMeta;key=newKey;
+    alert('暗証を変更しました。新しい暗証は忘れないでください。');
+  }catch(e){
+    state.updatedAt=previousUpdatedAt;
+    alert('暗証を変更できませんでした。以前の暗証とデータを維持しています。');
+  }
 }
 async function resetAll(){
   if(!confirm('この端末のMSW-DBデータをすべて削除します。\nバックアップが無い場合は復元できません。'))return;
   const word=prompt('実行する場合は「全消去」と入力してください');if(word!=='全消去')return;
-  await idbDel('data');await idbDel('meta');meta=null;key=null;state=null;selectedPatient=null;alert('全消去しました。');renderLock();
+  try{await idbDeletePair()}catch(e){alert('全消去できませんでした。保存データは変更されていません。');return}
+  meta=null;key=null;state=null;selectedPatient=null;alert('全消去しました。');renderLock();
 }
 function pickFile(accept,cb){const f=$('#fileInput');f.accept=accept;f.value='';f.onchange=()=>{if(f.files[0])cb(f.files[0])};f.click()}
 function parseCSV(text){text=text.replace(/^\uFEFF/,'');const rows=[];let row=[],cell='',q=false;for(let i=0;i<text.length;i++){const c=text[i],n=text[i+1];if(q){if(c==='"'&&n==='"'){cell+='"';i++}else if(c==='"')q=false;else cell+=c}else{if(c==='"')q=true;else if(c===','){row.push(cell);cell=''}else if(c==='\n'){row.push(cell);rows.push(row);row=[];cell=''}else if(c!=='\r')cell+=c}}if(cell.length||row.length){row.push(cell);rows.push(row)}return rows}
@@ -358,8 +576,50 @@ async function replacePatientsFromFileMaker(file){
     render();
   }catch(e){alert(`患者CSVの入れ替えを中止しました。\n${e.message||'ファイルの読み込みに失敗しました。'}`)}
 }
-async function importDrugs(file){const objs=rowsToObjects(parseCSV(await file.text()));state.drugs=objs.filter(x=>x['薬名']);await save();alert(`薬剤 ${state.drugs.length}件を読み込みました。`);render()}
-async function backup(){state.settings.lastBackupAt=nowISO();await save();const pack={format:'MSWDB-BACKUP',version:1,appVersion:APP_VERSION,exportedAt:nowISO(),meta:await idbGet('meta'),data:await idbGet('data')};const blob=new Blob([JSON.stringify(pack)],{type:'application/json'});download(blob,`MSWDB_backup_${new Date().toISOString().slice(0,10)}.mswdb`);setTimeout(()=>{if(screen==='settings')renderSettings();else render()},300)}
-async function restore(file){try{const pack=JSON.parse(await file.text());if(pack.format!=='MSWDB-BACKUP')throw new Error();if(!confirm('現在のデータをバックアップ内容で置き換えます。よろしいですか？'))return;await idbSet('meta',pack.meta);await idbSet('data',pack.data);meta=pack.meta;key=null;state=null;alert('復元しました。バックアップ作成時の暗証で再度ロック解除してください。');renderLock()}catch(e){alert('バックアップファイルを読み込めませんでした。')}}
+async function importDrugs(file){
+  try{
+    const objs=rowsToObjects(parseCSV(await file.text()));
+    const incoming=objs.filter(x=>x['薬名']);
+    const previous=state.drugs;
+    state.drugs=incoming;
+    try{await save()}catch(e){state.drugs=previous;throw e}
+    alert(`薬剤 ${incoming.length}件を読み込みました。`);render();
+  }catch(e){alert('薬剤CSVを読み込めませんでした。元のデータは変更されていません。')}
+}
+async function backup(){
+  // Export only a committed encrypted snapshot; never announce success after a failed read/write.
+  const previous=state.settings.lastBackupAt;
+  try{
+    state.settings.lastBackupAt=nowISO();
+    try{await save()}catch(e){state.settings.lastBackupAt=previous;throw e}
+    const [storedMeta,storedData]=await Promise.all([idbGet('meta'),idbGet('data')]);
+    if(!storedMeta||!storedData)throw Error('保存済みの暗号化データがありません');
+    const pack={format:'MSWDB-BACKUP',version:1,appVersion:APP_VERSION,exportedAt:nowISO(),meta:storedMeta,data:storedData};
+    validateBackupEnvelope(pack);
+    const blob=new Blob([JSON.stringify(pack)],{type:'application/json'});
+    download(blob,`MSWDB_backup_${new Date().toISOString().slice(0,10)}.mswdb`);
+    // iOS download completion cannot be verified here. Remind the user to confirm the file exists.
+    alert('バックアップの書き出しを開始しました。「ファイル」アプリで保存されたことを確認してください。');
+    setTimeout(()=>{if(screen==='settings')renderSettings();else render()},300);
+  }catch(e){alert('バックアップを書き出せませんでした。保存容量とデータの状態を確認してください。')}
+}
+async function verifyBackupWithPin(pack,pin){
+  const backupKey=await derive(pin,unb64(pack.meta.salt));
+  const check=await decryptObj(pack.meta.check,backupKey);
+  if(!check||check.ok!==true)throw Error('暗証確認データが不正です');
+  const recovered=await decryptObj(pack.data,backupKey);
+  if(!recovered||!Array.isArray(recovered.patients)||!Array.isArray(recovered.drugs)||!recovered.settings||typeof recovered.settings!=='object')throw Error('患者データの形式が不正です');
+  return recovered;
+}
+async function restore(file){
+  let pack;
+  try{pack=validateBackupEnvelope(JSON.parse(await file.text()))}catch(e){alert('バックアップ形式を読み込めませんでした。現在のデータは変更されていません。');return}
+  const pin=prompt('バックアップ作成時の暗証を入力してください。復元前に暗号化データの整合性を検証します。');
+  if(pin===null)return;
+  try{await verifyBackupWithPin(pack,pin)}catch(e){alert('暗証が違うか、バックアップが破損しています。現在のデータは変更されていません。');return}
+  if(!confirm('バックアップの暗号化データを検証しました。現在のデータを置き換えます。よろしいですか？'))return;
+  try{await idbRestorePair(pack.meta,pack.data);meta=pack.meta;key=null;state=null;alert('復元しました。バックアップ作成時の暗証で再度ロック解除してください。');renderLock()}
+  catch(e){alert('復元できませんでした。現在の保存データは変更されていません。')}
+}
 function download(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 init().catch(e=>{document.getElementById('app').innerHTML=`<div class="lockwrap"><div class="lockcard"><h1>起動できません</h1><p>${esc(e.message)}</p><p class="notice">HTTPSで開いているか確認してください。iPadではSafariからホーム画面へ追加して使用します。</p></div></div>`});

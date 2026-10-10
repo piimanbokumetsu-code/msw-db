@@ -196,3 +196,13 @@ border-color:var(--brand);
 .duplicate-bed-select{max-width:100%;min-height:40px;border:1px solid #aaa;border-radius:8px;background:white;padding:5px}
 .duplicate-move-save{white-space:normal}
 @media(max-width:520px){.duplicate-patient-row{flex-wrap:wrap}.duplicate-move{width:100%;flex-direction:row;align-items:center;flex-wrap:wrap}.duplicate-move label{width:100%}.duplicate-bed-select{flex:1;min-width:100px}}
+
+/* v1.0.11: approved patient-list layout; separate white cards, five rooms in one row */
+.compact-room-row{grid-column:1/-1;display:grid;grid-template-columns:repeat(5,minmax(170px,1fr));gap:10px;overflow-x:auto;max-width:100%;padding-bottom:5px;align-items:stretch}
+.compact-room-row .room-block{min-width:170px;background:#fff;padding:8px;border-radius:12px}
+.compact-room-row .bed-grid{grid-template-columns:1fr;gap:6px}
+.compact-room-row .bed-slot{min-height:92px;padding:7px}
+.compact-room-row .room-title{font-size:15px;margin-bottom:6px}
+.bed-slot{min-height:110px;gap:4px;padding:8px}
+.bed-meta-line{font-size:11px!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;display:block}
+@media(max-width:800px){.compact-room-row{grid-template-columns:repeat(5,minmax(155px,1fr))}}
