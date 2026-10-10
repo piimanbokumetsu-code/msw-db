@@ -177,3 +177,12 @@ border-color:var(--brand);
   .morning-table tr{break-inside:avoid;page-break-inside:avoid}
   .morning-table .c-bed{width:5.1%}.morning-table .c-id{width:6.1%}.morning-table .c-name{width:9.7%}.morning-table .c-admit{width:5.6%}.morning-table .c-doc{width:5.1%}.morning-table .c-address{width:4.6%}.morning-table .c-disease{width:9.7%}.morning-table .c-care{width:5.1%}.morning-table .c-facility{width:12.8%}.morning-table .c-memo{width:28.1%}.morning-table .c-family{width:6.6%}.morning-table .c-days{width:6.6%}
 }
+
+/* Ver.1.0.8: show every patient assigned to the same bed */
+.duplicate-bed{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:8px}
+.duplicate-bed .bed-line{align-self:stretch;text-align:left}
+.duplicate-bed strong{font-size:15px}
+.duplicate-list{padding:14px;max-width:850px;margin:auto;display:flex;flex-direction:column;gap:12px}
+.duplicate-patient{display:flex;flex-direction:column;gap:10px}
+.duplicate-patient .patient-card{cursor:default}
+.duplicate-open{align-self:flex-start}
