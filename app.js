@@ -3,7 +3,7 @@ const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const enc=new TextEncoder(), dec=new TextDecoder();
 const DB_NAME='mswdb_secure_v1', STORE='kv';
 let db=null,key=null,state=null,meta=null,screen='patients',selectedPatient=null,activeTab='basic',lockTimer=null;
-const APP_VERSION='1.0.8';
+const APP_VERSION='1.0.9';
 
 const masterFields=['ベッド番号','主治医','病名','保険','本人職業','術式','入院元','かかりつけ','家構','KP職業','介護度','入院時介護度','介護連携','ケアマネ・施設','検討会','退院支援','食事','食事：介助量','水分：トロミ','排泄','排泄：介助量','排泄：尿便意','排泄：利用','移乗','移動器具','睡眠','睡眠：薬剤','高次脳','問題行動','スケール','リハ状況','DM注','コール'];
 const defaultMasters={
@@ -186,11 +186,25 @@ function roomMapHtml(room,patients,q){
   return`<div class="room-block"><div class="room-title">${esc(room.room)}</div><div class="bed-grid">${room.beds.map(bed=>{const ps=patientsForBed(bed,patients);if(q&&!ps.length)return'';return patientBedHtml(bed,ps)}).join('')}</div></div>`;
 }
 function openDuplicateBed(bed){
+  $('#duplicateModal')?.remove();
   const ps=patientsForBed(bed);
-  if(!ps.length){drawPatientList();return}
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="duplicateModal"><div class="sheet"><div class="sheethead"><button class="btn secondary" id="closeDuplicate">← 戻る</button><div><h2>${esc(bed)}</h2><div class="notice">${ps.length}名重複あり・下へスクロールして全員確認できます</div></div></div><div class="duplicate-list">${ps.map((p,i)=>`<article class="panel duplicate-patient"><h3>患者 ${i+1}／${ps.length}</h3>${patientCard(p)}<button class="btn duplicate-open" data-id="${esc(p.id)}">この患者の詳細・編集を開く</button></article>`).join('')}</div></div></div>`);
+  if(ps.length<2){drawPatientList();return}
+  const beds=officialBeds();
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal" id="duplicateModal"><div class="sheet"><div class="sheethead"><button class="btn secondary" id="closeDuplicate">← 戻る</button><div><h2>${esc(bed)}</h2><div class="notice duplicate-warning">${ps.length}名重複あり・下へスクロールして全員確認できます</div></div></div><div class="duplicate-list">${ps.map((p,i)=>`<article class="panel duplicate-patient"><h3>患者 ${i+1}／${ps.length}</h3><div class="duplicate-patient-row"><div class="duplicate-patient-info">${patientCard(p)}</div><div class="duplicate-move"><label for="move-${i}">ベッド変更</label><select id="move-${i}" class="duplicate-bed-select" data-id="${esc(p.id)}"><option value="${esc(p.data['ベッド番号']||'')}">${esc(p.data['ベッド番号']||'未配置')}（現在）</option>${beds.filter(b=>normalizeBed(b)!==normalizeBed(p.data['ベッド番号'])).map(b=>`<option value="${esc(b)}">${esc(b)}</option>`).join('')}</select><button class="btn duplicate-move-save" data-id="${esc(p.id)}">変更を保存</button></div></div><button class="btn secondary duplicate-open" data-id="${esc(p.id)}">この患者の詳細・編集を開く</button></article>`).join('')}</div></div></div>`);
   $('#closeDuplicate').onclick=()=>$('#duplicateModal')?.remove();
   $$('.duplicate-open').forEach(btn=>btn.onclick=()=>{const p=state.patients.find(p=>p.id===btn.dataset.id);$('#duplicateModal')?.remove();if(p)openPatient(p)});
+  $$('.duplicate-move-save').forEach(btn=>btn.onclick=async()=>{
+    const p=state.patients.find(p=>p.id===btn.dataset.id);
+    const sel=[...$$('.duplicate-bed-select')].find(x=>x.dataset.id===btn.dataset.id);
+    if(!p||!sel)return;
+    const target=sel.value,old=p.data['ベッド番号'];
+    if(normalizeBed(target)===normalizeBed(old)){alert('変更先のベッドを選んでください。');return}
+    const occupied=patientsForBed(target).filter(x=>x.id!==p.id).length;
+    const message=`${p.data['氏名']||'この患者'}のベッドを ${old||'未配置'} → ${target} に変更します。${occupied?`\n※変更先にはすでに${occupied}名います。重複になります。`:''}\nよろしいですか？`;
+    if(!confirm(message))return;
+    p.data['ベッド番号']=target;p.updatedAt=nowISO();
+    try{await save();drawPatientList();openDuplicateBed(bed)}catch(e){p.data['ベッド番号']=old;alert('保存できませんでした。再度お試しください。')}
+  });
 }
 function bindPatientMapEvents(){
   $$('.duplicate-bed').forEach(x=>x.onclick=()=>openDuplicateBed(x.dataset.bed));

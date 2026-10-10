@@ -186,3 +186,13 @@ border-color:var(--brand);
 .duplicate-patient{display:flex;flex-direction:column;gap:10px}
 .duplicate-patient .patient-card{cursor:default}
 .duplicate-open{align-self:flex-start}
+
+/* v1.0.9: visible duplicate indicator and inline bed reassignment */
+.duplicate-bed strong,.duplicate-warning{color:#c62828;font-weight:800}
+.duplicate-patient-row{display:flex;gap:12px;align-items:flex-start}
+.duplicate-patient-info{flex:1;min-width:0}
+.duplicate-move{width:155px;display:flex;flex-direction:column;gap:8px;flex-shrink:0}
+.duplicate-move label{font-size:13px;font-weight:700}
+.duplicate-bed-select{max-width:100%;min-height:40px;border:1px solid #aaa;border-radius:8px;background:white;padding:5px}
+.duplicate-move-save{white-space:normal}
+@media(max-width:520px){.duplicate-patient-row{flex-wrap:wrap}.duplicate-move{width:100%;flex-direction:row;align-items:center;flex-wrap:wrap}.duplicate-move label{width:100%}.duplicate-bed-select{flex:1;min-width:100px}}
