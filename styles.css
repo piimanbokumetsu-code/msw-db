@@ -196,3 +196,42 @@ border-color:var(--brand);
 .duplicate-bed-select{max-width:100%;min-height:40px;border:1px solid #aaa;border-radius:8px;background:white;padding:5px}
 .duplicate-move-save{white-space:normal}
 @media(max-width:520px){.duplicate-patient-row{flex-wrap:wrap}.duplicate-move{width:100%;flex-direction:row;align-items:center;flex-wrap:wrap}.duplicate-move label{width:100%}.duplicate-bed-select{flex:1;min-width:100px}}
+
+/* Patient-list layout update: compact rooms share a single row on iPad. */
+.room-map-item{min-width:0}
+.room-map-item .room-block{height:100%;min-width:0;background:#fff}
+.room-map-item.compact-room{grid-column:span 1}
+.room-map-item.compact-room .bed-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.room-map-item.compact-room:has(.bed-slot:only-child) .bed-grid{grid-template-columns:minmax(0,1fr)}
+.bed-slot{min-width:0;overflow:hidden}
+.bed-slot strong,.bed-meta{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bed-meta{font-size:11px!important;color:var(--muted)}
+@media(min-width:760px){
+ .room-map:not(.icu-map){grid-template-columns:repeat(10,minmax(0,1fr))}
+ .room-map:not(.icu-map)>.room-map-item{grid-column:span 5}
+ .room-map:not(.icu-map)>.room-map-item.compact-room{grid-column:span 2}
+ .room-map:not(.icu-map)>.room-map-item.compact-room .room-block{padding:7px}
+ .room-map:not(.icu-map)>.room-map-item.compact-room .bed-grid{grid-template-columns:minmax(0,1fr)}
+ .room-map:not(.icu-map)>.room-map-item.compact-room .bed-slot{padding:6px;min-height:94px}
+ .room-map:not(.icu-map)>.room-map-item.compact-room .bed-slot strong{font-size:12px}
+ .room-map:not(.icu-map)>.room-map-item.compact-room .bed-meta{font-size:10px!important}
+}
+
+
+/* Patient-list layout: approved 67-bed, three-field demo. */
+.general-room-map { grid-template-columns:minmax(0,1fr); gap:12px; }
+.general-room-map > .standard-room { min-width:0; }
+.general-room-map .room-block { min-width:0; background:#fff; }
+.general-room-map .standard-room .bed-grid { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(148px,1fr); grid-template-columns:none; overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:5px; }
+.general-room-map .compact-room-scroll { grid-column:1 / -1; min-width:0; overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:5px; }
+.general-room-map .compact-room-row { display:grid; grid-template-columns:320px 320px 160px 160px 160px; gap:8px; width:max-content; align-items:stretch; }
+.general-room-map .compact-room-row .room-block { height:100%; padding:8px; }
+.general-room-map .compact-room-row .bed-grid { grid-template-columns:minmax(0,1fr); gap:5px; }
+.general-room-map .compact-room-row .two-bed-room .bed-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.general-room-map .bed-slot { min-width:0; min-height:86px; overflow:hidden; padding:8px; }
+.general-room-map .bed-slot strong { display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+.general-room-map .bed-meta.admission-line { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:4px; align-items:center; width:100%; max-width:100%; font-size:11px; white-space:nowrap; }
+.general-room-map .bed-meta.admission-line .doctor { min-width:0; overflow:hidden; text-overflow:ellipsis; text-align:center; }
+.general-room-map .bed-meta.admission-line .days { white-space:nowrap; font-weight:700; }
+.general-room-map .occupied-bed { background:#f1f7ff; }
+.general-room-map .empty-bed { background:#f8fafc; }
