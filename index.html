@@ -10,13 +10,13 @@
 <link rel="manifest" href="manifest.webmanifest" />
 <link rel="icon" href="icon.svg" />
 <link rel="apple-touch-icon" href="icon-192.png" />
-<link rel="stylesheet" href="styles.css?v=layout-20261013a" />
+<link rel="stylesheet" href="styles.css?v=layout-20261013c" />
 <meta name="application-name" content="MSW-DB" />
 <script>
 /* 2026-10-13: Refresh an installed PWA without clearing its IndexedDB. */
 (function(){
  if(!('serviceWorker' in navigator))return;
- var key='msw-layout-controller-20261013a';
+ var key='msw-layout-controller-20261013c';
  navigator.serviceWorker.addEventListener('controllerchange',function(){
    try { if(sessionStorage.getItem(key))return; sessionStorage.setItem(key,'1'); }catch(e){}
    location.reload();
@@ -42,6 +42,6 @@
 <body>
 <div id="app"></div>
 <input id="fileInput" type="file" hidden />
-<script src="app.js?v=layout-20261013a"></script>
+<script src="app.js?v=layout-20261013c"></script>
 </body>
 </html>

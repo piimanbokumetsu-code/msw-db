@@ -233,3 +233,60 @@ border-color:var(--brand);
 #patientList .general-room-map .compact-room-row>.two-bed-room{flex-basis:330px!important}
 #patientList .general-room-map .compact-room-row .two-bed-room .bed-grid{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;grid-auto-flow:row!important}
 #patientList .general-room-map .compact-room-row .compact-room:not(.two-bed-room) .bed-grid{display:grid!important;grid-template-columns:minmax(0,1fr)!important;grid-auto-flow:row!important}
+
+/* iPad mini fit-to-width ward map: no horizontal clipping of official beds. */
+#patientList .general-room-map>.standard-room .bed-grid{
+  display:grid!important;grid-auto-flow:row!important;grid-auto-columns:auto!important;
+  grid-template-columns:repeat(6,minmax(0,1fr))!important;
+  overflow-x:visible!important;gap:4px!important;
+}
+#patientList .general-room-map>.standard-room:has(.bed-grid>.bed-slot:nth-child(7)) .bed-grid{
+  grid-template-columns:repeat(7,minmax(0,1fr))!important;
+}
+#patientList .general-room-map>.compact-room-scroll{overflow-x:visible!important;padding-bottom:0!important}
+#patientList .general-room-map .compact-room-row{
+  display:grid!important;grid-template-columns:2fr 2fr 1fr 1fr 1fr!important;
+  width:100%!important;min-width:0!important;gap:5px!important;
+}
+#patientList .general-room-map .compact-room-row>.compact-room,
+#patientList .general-room-map .compact-room-row>.two-bed-room{
+  width:auto!important;min-width:0!important;flex-basis:auto!important;
+}
+#patientList .general-room-map .compact-room-row .room-block{padding:5px!important}
+#patientList .general-room-map .compact-room-row .bed-grid{gap:3px!important}
+#patientList .general-room-map .compact-room-guide{display:none!important}
+#patientList .icu-map{display:flex!important;flex-direction:column!important;gap:11px!important;min-width:0}
+#patientList .icu-map>.room-block{width:100%;min-width:0}
+#patientList .icu-map>.room-block .bed-grid{display:grid!important;grid-template-columns:repeat(7,minmax(0,1fr))!important;gap:4px!important}
+#patientList .icu-map>.room-block:has(.bed-grid>.bed-slot:nth-child(9)) .bed-grid{grid-template-columns:repeat(9,minmax(0,1fr))!important}
+#patientList .general-room-map .bed-slot,#patientList .icu-map .bed-slot{
+  min-width:0!important;min-height:76px;padding:5px 3px!important;gap:3px!important;overflow:hidden;
+}
+#patientList .general-room-map .bed-slot b,#patientList .icu-map .bed-slot b{font-size:clamp(8px,1.4vw,11px)!important;overflow-wrap:anywhere}
+#patientList .general-room-map .bed-slot strong,#patientList .icu-map .bed-slot strong{font-size:clamp(10px,1.65vw,14px)!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+#patientList .general-room-map .bed-meta.admission-line,#patientList .icu-map .bed-meta.admission-line{display:flex!important;justify-content:space-between;gap:2px!important;white-space:nowrap;font-size:clamp(7px,1.1vw,10px)!important;min-width:0}
+#patientList .general-room-map .bed-meta.admission-line>* ,#patientList .icu-map .bed-meta.admission-line>*{min-width:0;overflow:hidden;text-overflow:ellipsis}
+#patientList .general-room-map .bed-slot .tags,#patientList .icu-map .bed-slot .tags{display:none!important}
+#patientList .general-room-map .room-title,#patientList .icu-map .room-title{font-size:14px;margin-bottom:5px}
+@media(max-width:800px){
+  #patientList .general-room-map .room-block,#patientList .icu-map .room-block{padding:6px}
+  #patientList .general-room-map>.standard-room .bed-grid,#patientList .icu-map .bed-grid{gap:3px!important}
+  #patientList .general-room-map .compact-room-row{gap:3px!important}
+}
+
+/* 20261013c: iPad mini viewport fit — ICU full width, small rooms no intrinsic overflow. */
+#patientList .icu-map{display:grid!important;grid-template-columns:minmax(0,1fr)!important;width:100%!important;gap:10px!important}
+#patientList .icu-map>.room-block{grid-column:1 / -1!important;min-width:0!important;width:100%!important}
+#patientList .icu-map>.room-block .bed-grid{display:grid!important;grid-auto-flow:row!important;grid-template-columns:repeat(7,minmax(0,1fr))!important;min-width:0!important;width:100%!important;overflow:visible!important}
+#patientList .icu-map>.room-block:nth-child(3) .bed-grid{grid-template-columns:repeat(9,minmax(0,1fr))!important}
+#patientList .general-room-map>.compact-room-scroll{max-width:100%!important;min-width:0!important;overflow-x:clip!important}
+#patientList .general-room-map .compact-room-row{display:grid!important;grid-template-columns:minmax(0,2fr) minmax(0,2fr) repeat(3,minmax(0,1fr))!important;width:100%!important;max-width:100%!important;min-width:0!important;gap:3px!important}
+#patientList .general-room-map .compact-room-row>.compact-room{min-width:0!important;width:100%!important;max-width:100%!important;overflow:hidden!important}
+#patientList .general-room-map .compact-room-row .room-block{min-width:0!important;max-width:100%!important;overflow:hidden!important;padding:3px!important}
+#patientList .general-room-map .compact-room-row .bed-grid{min-width:0!important;width:100%!important;grid-auto-columns:minmax(0,1fr)!important}
+#patientList .general-room-map .compact-room-row .two-bed-room .bed-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+#patientList .general-room-map .compact-room-row .bed-slot{min-width:0!important;width:100%!important;padding:3px 1px!important;overflow:hidden!important}
+#patientList .general-room-map .compact-room-row .room-title{font-size:clamp(9px,1.5vw,13px)!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#patientList .general-room-map .compact-room-row .bed-slot b{font-size:clamp(7px,1vw,10px)!important}
+#patientList .general-room-map .compact-room-row .bed-slot strong{font-size:clamp(8px,1.3vw,12px)!important}
+#patientList .general-room-map .compact-room-row .admission-line{font-size:clamp(6px,0.85vw,9px)!important}
