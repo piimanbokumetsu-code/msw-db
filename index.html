@@ -10,12 +10,38 @@
 <link rel="manifest" href="manifest.webmanifest" />
 <link rel="icon" href="icon.svg" />
 <link rel="apple-touch-icon" href="icon-192.png" />
-<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="styles.css?v=layout-20261013a" />
 <meta name="application-name" content="MSW-DB" />
+<script>
+/* 2026-10-13: Refresh an installed PWA without clearing its IndexedDB. */
+(function(){
+ if(!('serviceWorker' in navigator))return;
+ var key='msw-layout-controller-20261013a';
+ navigator.serviceWorker.addEventListener('controllerchange',function(){
+   try { if(sessionStorage.getItem(key))return; sessionStorage.setItem(key,'1'); }catch(e){}
+   location.reload();
+ });
+ window.addEventListener('load',function(){
+   navigator.serviceWorker.getRegistration().then(function(reg){
+     if(!reg)return;
+     reg.update().catch(function(){});
+     if(reg.waiting)reg.waiting.postMessage({type:'SKIP_WAITING'});
+     reg.addEventListener('updatefound',function(){
+       var w=reg.installing;if(!w)return;
+       w.addEventListener('statechange',function(){
+         if(w.state==='installed'&&navigator.serviceWorker.controller){
+           w.postMessage({type:'SKIP_WAITING'});
+         }
+       });
+     });
+   }).catch(function(){});
+ });
+})();
+</script>
 </head>
 <body>
 <div id="app"></div>
 <input id="fileInput" type="file" hidden />
-<script src="app.js"></script>
+<script src="app.js?v=layout-20261013a"></script>
 </body>
 </html>
